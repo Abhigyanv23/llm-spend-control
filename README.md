@@ -225,7 +225,7 @@ docker-compose.yml     Postgres 16 + Redis 7
 - [API Reference](docs/api.md)
 - [Changelog](CHANGELOG.md)
 - Phase notes: [Phase 1: Gateway](docs/phases/phase-1-gateway.md) · [Phase 2: Budgets](docs/phases/phase-2-budgets.md) · [Phase 3: Routing](docs/phases/phase-3-routing.md)
-- Theory notes: [Phase 2](docs/notes/phase-2-theory.md) · [Phase 3](docs/notes/phase-3-theory.md)
+- Theory notes: - Theory notes: [Phase 1](docs/notes/phase-1-theory.md) · [Phase 2](docs/notes/phase-2-theory.md) · [Phase 3](docs/notes/phase-3-theory.md)
 - Change records: [Phase 2](docs/phases/phase-2-changes.md) · [Phase 3](docs/phases/phase-3-changes.md)
 
 ## Authors
