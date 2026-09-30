@@ -1,0 +1,44 @@
+# Local infrastructure for Phase 2. The FastAPI app runs on the host, not in Docker (yet).
+# Variables come from .env (docker compose reads it automatically); defaults after ":-".
+name: llm-spend-control
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: spend-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-spend}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-spend_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-spend}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"   # localhost only, not your whole network
+    volumes:
+      - pgdata:/var/lib/postgresql/data           # named volume: data survives `down`/`up`
+    healthcheck:
+      # $$ escapes $ so the variable is expanded inside the container, not by compose
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: spend-redis
+    # Append-only file: counters survive a container restart. Reconciliation still runs
+    # at app startup, because Postgres (not Redis) is the source of truth.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:

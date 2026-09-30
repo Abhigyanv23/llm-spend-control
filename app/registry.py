@@ -1,8 +1,10 @@
 from dataclasses import asdict, dataclass
+from decimal import Decimal
 
 import yaml
 
 from app.errors import UnknownModelError
+from app.money import TOKENS_PER_MTOK, quantize_usd, to_decimal
 
 
 @dataclass(frozen=True)
@@ -10,20 +12,27 @@ class ModelSpec:
     name: str
     provider: str
     tier: int                      # 1 = cheap/simple, 2 = mid, 3 = strongest
-    input_cost_per_mtok: float
-    output_cost_per_mtok: float
+    input_cost_per_mtok: Decimal
+    output_cost_per_mtok: Decimal
     avg_latency_ms: int
     max_context: int
     supports: tuple[str, ...] = ()
 
-    def cost(self, input_tokens: int, output_tokens: int) -> float:
+    def cost(self, input_tokens: int, output_tokens: int) -> Decimal:
+        """Exact cost in USD, rounded to 8 decimal places (the NUMERIC(14, 8) scale)."""
         raw = (input_tokens * self.input_cost_per_mtok
-               + output_tokens * self.output_cost_per_mtok) / 1_000_000
-        return round(raw, 8)
+               + output_tokens * self.output_cost_per_mtok) / TOKENS_PER_MTOK
+        return quantize_usd(raw)
+
+    def worst_case_cost(self, estimated_input_tokens: int, max_tokens: int) -> Decimal:
+        """Upper bound used for budget reservation: assume the model uses ALL of max_tokens."""
+        return self.cost(estimated_input_tokens, max_tokens)
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["supports"] = list(self.supports)
+        d["input_cost_per_mtok"] = str(self.input_cost_per_mtok)
+        d["output_cost_per_mtok"] = str(self.output_cost_per_mtok)
         return d
 
 
@@ -38,6 +47,9 @@ class ModelRegistry:
         for entry in data["models"]:
             entry = dict(entry)
             entry["supports"] = tuple(entry.get("supports") or [])
+            # YAML parses 0.15 as a float; convert via str() so prices are exact Decimals
+            entry["input_cost_per_mtok"] = to_decimal(entry["input_cost_per_mtok"])
+            entry["output_cost_per_mtok"] = to_decimal(entry["output_cost_per_mtok"])
             spec = ModelSpec(**entry)
             self._models[spec.name] = spec
 

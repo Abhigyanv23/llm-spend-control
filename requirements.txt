@@ -1,6 +1,19 @@
+# --- Runtime (Phase 1) ---
 fastapi>=0.110
 uvicorn[standard]>=0.29
 httpx>=0.27
 pydantic>=2.6
 pydantic-settings>=2.2
 pyyaml>=6.0
+
+# --- Runtime (Phase 2: audit log + budgets) ---
+sqlalchemy[asyncio]>=2.0.30
+asyncpg>=0.30          # async Postgres driver (0.30+ ships Python 3.13 wheels)
+alembic>=1.13
+redis>=5.0             # includes redis.asyncio
+
+# --- Testing ---
+pytest>=8.0
+pytest-asyncio>=0.24
+fakeredis[lua]>=2.23   # in-memory Redis; [lua] adds lupa so EVAL/Lua scripts work
+aiosqlite>=0.20        # lets pytest run the DB layer without Docker

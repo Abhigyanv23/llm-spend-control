@@ -21,8 +21,13 @@ makes cost visible, enforceable, and optimisable without every calling service h
 | Model registry (prices, tiers, context limits) in YAML | ✅ Phase 1 |
 | Provider adapters: OpenAI, Anthropic, Ollama, Mock | ✅ Phase 1 |
 | Normalised error handling (retryable vs non-retryable) | ✅ Phase 1 |
-| Request audit log (PostgreSQL) | ⏳ Phase 2 |
-| Per-team/feature daily & monthly budgets (Redis) | ⏳ Phase 2 |
+| Request audit log in PostgreSQL (every request, incl. failures and blocks) | ✅ Phase 2 |
+| Exact money: `Decimal` / `NUMERIC(14,8)` / integer nano-dollars in Redis | ✅ Phase 2 |
+| Per-team and per-feature daily & monthly budgets | ✅ Phase 2 |
+| Atomic reserve-then-settle enforcement (Redis Lua) | ✅ Phase 2 |
+| Warnings at 80%, blocks at 100%, audited overrides for high priority | ✅ Phase 2 |
+| Reconciliation of Redis counters from Postgres | ✅ Phase 2 |
+| Usage and budget APIs (`/v1/usage`, `/v1/budgets`) | ✅ Phase 2 |
 | Complexity-based model routing | ⏳ Phase 3 |
 | Async quality verification & escalation | ⏳ Phase 4 |
 | Cost dashboard | ⏳ Phase 5 |
@@ -30,33 +35,43 @@ makes cost visible, enforceable, and optimisable without every calling service h
 
 ## Tech Stack
 
-Python 3.11+ · FastAPI · httpx (async) · Pydantic v2 · PyYAML
-*(Coming: PostgreSQL · Redis · scikit-learn · Celery/RQ · Streamlit · Docker Compose)*
+Python 3.11+ · FastAPI · httpx (async) · Pydantic v2 · PyYAML · PostgreSQL 16 · SQLAlchemy 2.0
+(async) + asyncpg · Alembic · Redis 7 (Lua scripts) · Docker Compose · pytest + fakeredis
+*(Coming: scikit-learn · Celery/RQ · Streamlit)*
 
 ## Quickstart
 
-```bash
+Prerequisites: Python 3.11+, Docker Desktop (running).
+
+```powershell
 python -m venv .venv
-.venv\Scripts\activate                     # Linux/Mac: source .venv/bin/activate
+.venv\Scripts\activate                       # Linux/Mac: source .venv/bin/activate
 python -m pip install -r requirements.txt
-copy .env.example .env                     # Linux/Mac: cp .env.example .env
+copy .env.example .env                       # Linux/Mac: cp .env.example .env
+
+docker compose up -d                         # Postgres 16 + Redis 7
+docker compose ps                            # wait until both show "(healthy)"
+
+python -m alembic upgrade head               # create tables
+python scripts/seed_budgets.py               # example budget policies
 python -m uvicorn app.main:app --reload
 ```
 
 Open **http://127.0.0.1:8000/docs** for the interactive API.
 
-### Smoke test
+### Tests
 
-With the server running, in a second terminal:
-
-```bash
-python scripts/smoke_test.py
+```powershell
+python -m pytest                             # unit + in-process API tests (no Docker needed)
+python scripts/smoke_test.py                 # end-to-end against the running server
 ```
 
-This checks the happy path (mock model) plus error handling: unknown model, missing API key,
-validation error, and context-length limit.
+`pytest` uses fakeredis and SQLite, so it runs anywhere in a few seconds. The smoke test
+exercises the real Postgres + Redis: audit logging, the 80% warning, 402 blocks, the override
+flow and the status endpoint. It creates its own tiny budgets on fresh team ids, so it can be
+re-run any number of times.
 
-### Example request
+### Example requests
 
 Linux/Mac (bash):
 ```bash
@@ -70,6 +85,16 @@ Windows (PowerShell):
 $body = @{ team_id = "search"; feature = "summarize"
            messages = @(@{ role = "user"; content = "Hello gateway" }) } | ConvertTo-Json -Depth 5
 Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/chat -Method Post -ContentType "application/json" -Body $body
+
+# Set a budget, then check it
+Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/budgets/team/search -Method Put `
+  -ContentType "application/json" -Body '{"daily_limit_usd": "5.00", "monthly_limit_usd": "100.00"}'
+Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/budgets/team/search/status
+
+# High-priority request that is allowed past an exhausted budget
+Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/chat -Method Post -ContentType "application/json" `
+  -Headers @{ "X-Budget-Override" = "incident INC-42" } `
+  -Body '{"team_id":"demo-tiny","feature":"summarize","priority":"high","max_tokens":2000,"messages":[{"role":"user","content":"hi"}]}'
 ```
 
 ### Troubleshooting
@@ -81,6 +106,15 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/chat -Method Post -ContentType "
 | `ImportError: cannot import name X` | File exists but doesn't define `X` (unsaved or wrong file) | Check the file's contents; save it |
 | `Cannot bind parameter 'Headers'` in PowerShell | `curl` is an alias for `Invoke-WebRequest` | Use `Invoke-RestMethod` (above) or `scripts/smoke_test.py` |
 | Slow installs / "file in use" errors | Project inside a OneDrive-synced folder | Move the project outside OneDrive and recreate `.venv` |
+| `docker: command not found` / `error during connect` | Docker Desktop not installed or not running | Start Docker Desktop, wait for "Engine running", open a new terminal |
+| `Bind for 127.0.0.1:5432 failed: port is already allocated` | A local Postgres (or another container) uses 5432 | Set `POSTGRES_PORT=5433` in `.env` and use `:5433` in `DATABASE_URL` |
+| `password authentication failed for user "spend"` | Password changed after the volume was created (it's only applied on first init) | `docker compose down -v` (deletes data) then `up -d`, or keep the old password |
+| `ConnectionRefusedError` / `[WinError 1225]` from asyncpg or Alembic | Postgres container not running/healthy yet | `docker compose ps`; wait for `(healthy)`; `docker compose logs postgres` |
+| `relation "request_logs" does not exist` | Migrations not applied | `python -m alembic upgrade head` |
+| `/health` shows `"redis": "down (...)"`, responses carry `X-Budget-Warning: budget-check-unavailable` | Redis unreachable; `BUDGET_FAIL_MODE=open` lets traffic through unchecked | `docker compose up -d redis`; restart the app so it reconciles |
+| All requests fail with `503 budget_unavailable` | Redis/Postgres unreachable and `BUDGET_FAIL_MODE=closed` | Bring the dependency back, or switch to `open` for local dev |
+| `503 database_unavailable` on `/v1/usage` or `/v1/budgets` | Postgres unreachable | As above for Postgres |
+| Budgets look wrong after `docker compose restart redis` or `FLUSHALL` | Redis counters lost or stale | Restart the app, or `POST /v1/budgets/reconcile` (rebuilds from Postgres) |
 
 ## Configuration
 
@@ -91,29 +125,56 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/chat -Method Post -ContentType "
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Local Ollama server |
 | `MODEL_REGISTRY_PATH` | `config/models.yaml` | Model catalogue |
 | `REQUEST_TIMEOUT_S` | `60` | Upstream call timeout |
+| `DATABASE_URL` | `postgresql+asyncpg://spend:spend_dev_password@127.0.0.1:5432/spend` | Audit log + policies (source of truth) |
+| `REDIS_URL` | `redis://127.0.0.1:6379/0` | Real-time budget counters |
+| `REDIS_TIMEOUT_S` | `0.5` | Redis socket timeout; keeps "Redis is down" decisions fast |
+| `BUDGET_WARN_THRESHOLD` | `0.8` | Fraction of a limit that triggers warnings and alerts |
+| `BUDGET_FAIL_MODE` | `open` | `open`: allow + warn if Redis is down; `closed`: reject with 503 |
+| `RECONCILE_ON_STARTUP` | `true` | Rebuild Redis counters from `request_logs` at startup |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `spend` / `spend_dev_password` / `spend` | Used by `docker compose` to initialise Postgres |
+| `POSTGRES_PORT` / `REDIS_PORT` | `5432` / `6379` | Host ports published by `docker compose` |
 
-Model prices in `config/models.yaml` are illustrative. Update them from each provider's pricing page.
+Model names and prices in `config/models.yaml` are illustrative. Verify them against each
+provider's pricing page before relying on the cost numbers.
+
+## Project layout
 
 ```
 app/
-├── main.py          FastAPI app, lifespan, error handler, routes
-├── gateway.py       Core request pipeline
-├── registry.py      Model registry + cost calculation
-├── schemas.py       Canonical request/response models
-├── errors.py        Normalised error types
-├── config.py        Environment settings
-└── providers/       One adapter per provider (Adapter pattern)
-config/models.yaml   Model catalogue
-scripts/             Smoke tests and utilities
-docs/                Architecture, API reference, per-phase design notes
+├── main.py            App factory, lifespan (wiring), error handlers, /health, /v1/chat
+├── gateway.py         Request pipeline: estimate -> reserve -> call -> settle
+├── audit.py           Audit-log writer (background) + usage queries
+├── money.py           Decimal / nano-dollar helpers
+├── tokens.py          Pre-call token estimation
+├── registry.py        Model registry + exact Decimal cost calculation
+├── schemas.py         Canonical request/response + budget/usage models
+├── errors.py          Normalised error types (incl. 402 / 503 budget errors)
+├── config.py          Environment settings
+├── api/               /v1/usage and /v1/budgets routers
+├── budgets/           periods, Lua scripts, Redis store, policies, service, reconciliation
+├── db/                SQLAlchemy engine/session + ORM models
+└── providers/         One adapter per provider (Adapter pattern)
+migrations/            Alembic environment + versioned schema migrations
+config/models.yaml     Model catalogue
+scripts/               Smoke test, budget seeding
+tests/                 pytest suite (fakeredis + SQLite)
+docs/                  Architecture, API reference, per-phase design notes
+docker-compose.yml     Postgres 16 + Redis 7
 ```
+
+## Known limitations
+
+- No authentication: anyone who can reach the API can change budgets or read usage (planned).
+- Token estimation before the call is a ~4 chars/token heuristic; real input can exceed it.
+- Reconciliation resets in-flight holds, so it is only safe with a single gateway instance or during a quiet window.
+- See [Phase 2 notes](docs/phases/phase-2-budgets.md#known-limitations) for the full list.
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
 - [API Reference](docs/api.md)
 - [Changelog](CHANGELOG.md)
-- Phase notes: [Phase 1: Gateway](docs/phases/phase-1-gateway.md)
+- Phase notes: [Phase 1: Gateway](docs/phases/phase-1-gateway.md) · [Phase 2: Budgets](docs/phases/phase-2-budgets.md)
 
 ## Author
 

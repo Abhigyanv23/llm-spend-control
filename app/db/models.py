@@ -1,0 +1,108 @@
+"""ORM models. Postgres is the source of truth for spend; Redis only caches counters."""
+import uuid
+from datetime import datetime
+from decimal import Decimal
+
+from sqlalchemy import (JSON, Boolean, CheckConstraint, DateTime, Float, Index, Integer,
+                        MetaData, Numeric, String, Text, UniqueConstraint, Uuid, func, true)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+# Money: exact fixed-point, 14 digits total, 8 after the point (max $999,999.99999999)
+Money = Numeric(14, 8, asdecimal=True)
+# JSONB on Postgres (binary, indexable); plain JSON elsewhere (SQLite in unit tests)
+JsonB = JSON().with_variant(JSONB(), "postgresql")
+
+REQUEST_STATUSES = ("success", "provider_error", "budget_blocked",
+                    "validation_error", "internal_error")
+
+# Deterministic constraint names, so Alembic migrations can refer to them reliably
+NAMING_CONVENTION = {
+    "ix": "ix_%(table_name)s_%(column_0_N_name)s",
+    "uq": "uq_%(table_name)s_%(column_0_N_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+
+
+class Base(DeclarativeBase):
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)
+
+
+class RequestLog(Base):
+    """Append-only audit trail: one row per /v1/chat request, including failures and blocks."""
+    __tablename__ = "request_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)          # = request_id
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False)
+    team_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    feature: Mapped[str] = mapped_column(String(64), nullable=False)
+    priority: Mapped[str] = mapped_column(String(16), nullable=False)
+    model: Mapped[str | None] = mapped_column(String(128))
+    provider: Mapped[str | None] = mapped_column(String(32))
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    estimated_cost_usd: Mapped[Decimal] = mapped_column(Money, nullable=False, server_default="0")
+    cost_usd: Mapped[Decimal] = mapped_column(Money, nullable=False, server_default="0")
+    latency_ms: Mapped[float | None] = mapped_column(Float)   # a duration, not money: float is fine
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    override_reason: Mapped[str | None] = mapped_column(Text)
+    # "metadata" is reserved on SQLAlchemy declarative classes, so the attribute is `meta`
+    # while the column in the database is still called "metadata"
+    meta: Mapped[dict] = mapped_column("metadata", JsonB, nullable=False, default=dict)
+
+    __table_args__ = (
+        CheckConstraint(f"status IN {REQUEST_STATUSES}", name="status_valid"),
+        # Composite indexes: equality column first, range column (created_at) second
+        Index("ix_request_logs_team_id_created_at", "team_id", "created_at"),
+        Index("ix_request_logs_feature_created_at", "feature", "created_at"),
+        Index("ix_request_logs_created_at", "created_at"),
+    )
+
+
+class BudgetPolicy(Base):
+    """Daily/monthly limits for one team or one feature. NULL limit = unlimited."""
+    __tablename__ = "budget_policies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)          # team | feature
+    scope_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    daily_limit_usd: Mapped[Decimal | None] = mapped_column(Money)
+    monthly_limit_usd: Mapped[Decimal | None] = mapped_column(Money)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("scope", "scope_id"),
+        CheckConstraint("scope IN ('team', 'feature')", name="scope_valid"),
+        CheckConstraint("daily_limit_usd IS NULL OR daily_limit_usd >= 0", name="daily_non_negative"),
+        CheckConstraint("monthly_limit_usd IS NULL OR monthly_limit_usd >= 0",
+                        name="monthly_non_negative"),
+    )
+
+
+class BudgetAlert(Base):
+    """A threshold crossing, recorded once per scope + period + threshold (dedup by unique key)."""
+    __tablename__ = "budget_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    scope_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    period: Mapped[str] = mapped_column(String(8), nullable=False)          # day | month
+    period_key: Mapped[str] = mapped_column(String(10), nullable=False)     # 2026-09-30 | 2026-09
+    threshold: Mapped[Decimal] = mapped_column(Numeric(4, 2), nullable=False)  # 0.80, 1.00
+    projected_usd: Mapped[Decimal] = mapped_column(Money, nullable=False)
+    limit_usd: Mapped[Decimal] = mapped_column(Money, nullable=False)
+    request_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+
+    __table_args__ = (
+        UniqueConstraint("scope", "scope_id", "period", "period_key", "threshold"),
+    )

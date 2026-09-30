@@ -2,6 +2,46 @@
 
 All notable changes, grouped by build phase.
 
+## [0.2.0] - Phase 2: Cost Tracking and Budgets
+
+### Added
+- PostgreSQL audit trail (`request_logs`): one row per `/v1/chat` request, including provider
+  errors, validation errors and budget blocks (cost 0 when no provider was reached).
+- Budget policies (`budget_policies`) per team and per feature, with daily and monthly limits
+  (UTC calendar day / month; `NULL` = unlimited).
+- Real-time enforcement with **reserve-then-settle**: the worst-case cost is held atomically in
+  Redis (Lua script) before the provider call and swapped for the actual cost afterwards;
+  `try/finally` guarantees a hold is always released.
+- Warnings at `BUDGET_WARN_THRESHOLD` (default 80%): `X-Budget-Warning` header,
+  `metadata.budget_warnings`, and a deduplicated row in `budget_alerts`.
+- Blocking at 100%: `402 budget_exceeded` (low/normal priority) or `402 override_required`
+  (high/critical); high/critical requests may proceed with an `X-Budget-Override` reason,
+  which is stored in the audit log.
+- `BUDGET_FAIL_MODE` (`open` | `closed`) for when Redis or Postgres is unavailable
+  (`503 budget_unavailable` in closed mode).
+- Reconciliation that rebuilds Redis counters from `request_logs`, run at startup and via
+  `POST /v1/budgets/reconcile`.
+- Endpoints: `GET /v1/usage` (filters, totals, pagination), `GET /v1/budgets`,
+  `PUT /v1/budgets/{scope}/{scope_id}`, `GET /v1/budgets/{scope}/{scope_id}/status`.
+- `/health` now reports Postgres and Redis status (`ok` / `degraded`).
+- `docker-compose.yml` with PostgreSQL 16 and Redis 7 (named volumes, healthchecks).
+- Alembic migrations (async env); `scripts/seed_budgets.py` for example policies.
+- pytest suite (60 tests: money, estimation, periods, Lua atomicity incl. a concurrency race,
+  budget service, full HTTP pipeline) using fakeredis and SQLite.
+- Smoke test extended with 8 Phase 2 checks; `GATEWAY_URL` env var to target another server.
+
+### Changed
+- **Breaking:** `cost_usd` (and every money field) is now a fixed-point JSON **string**
+  (e.g. `"0.00000430"`) backed by `Decimal`, not a float. Model prices in `/v1/models` are
+  strings too.
+- **Breaking:** `team_id` and `feature` must match `^[A-Za-z0-9._-]+$` (max 64 chars), since
+  they become Redis keys and header values.
+- Cost calculation uses `Decimal` end to end (`ModelSpec.cost` returns `Decimal`).
+- Token estimation moved to `app/tokens.py` and adds a 4-token per-message overhead; the
+  context check uses the same estimate.
+- `app.main` is now an app factory (`create_app`) so dependencies can be injected in tests.
+- Database errors on read endpoints return a structured `503 database_unavailable`.
+
 ## [0.1.0] - Phase 1: Unified Request Gateway
 
 ### Added

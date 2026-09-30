@@ -3,11 +3,7 @@ import random
 
 from app.providers.base import ProviderAdapter, ProviderResult
 from app.schemas import ChatRequest
-
-
-def estimate_tokens(text: str) -> int:
-    """Rough heuristic: ~4 characters per token for English text."""
-    return max(1, len(text) // 4)
+from app.tokens import estimate_tokens
 
 
 class MockAdapter(ProviderAdapter):
