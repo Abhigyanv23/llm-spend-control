@@ -22,9 +22,9 @@ can reach the server. Known limitation, planned for a later phase.
 |---|---|---|---|---|
 | `messages` | list of `{role, content}` | yes | — | role ∈ `system`, `user`, `assistant`; at least 1 |
 | `team_id` | string | yes | — | Budget owner. `^[A-Za-z0-9._-]+$`, max 64 |
-| `feature` | string | yes | — | Product feature making the call. Same format as `team_id` |
+| `feature` | string | yes | — | Product feature making the call. Same format as `team_id`. Also selects the feature's routing rule |
 | `priority` | string | no | `normal` | `low`, `normal`, `high`, `critical` |
-| `model` | string | no | registry default | Must exist in `/v1/models` |
+| `model` | string | no | routed | If set, must exist in `/v1/models` and is used as-is (no routing, no downgrade). If omitted, the router picks one |
 | `max_tokens` | int | no | 512 | 1–8192. Also sets the **worst-case budget reservation** |
 | `temperature` | float | no | 0.7 | 0.0–2.0 |
 
@@ -57,13 +57,46 @@ X-Budget-Warning: budget-check-unavailable
         "reserved_usd": "0.00000000", "estimated_cost_usd": "0.00020550",
         "projected_usd": "4.10020550", "percent_used": 82.0,
         "resets_at": "2026-10-01T00:00:00Z" }
-    ]
+    ],
+    "routing": {
+      "model": "mock-echo", "tier": 1, "source": "routed", "min_tier": 1, "max_tier": 3,
+      "fallbacks": [],
+      "reasons": [],
+      "classifier": {
+        "name": "rules-v1", "tier": 1, "confidence": 0.5,
+        "reasons": ["no complexity signals: defaulting to the cheapest tier"],
+        "features": { "input_tokens": 7, "message_count": 1, "has_code": false,
+                      "structured_output": false, "keyword_hits": {}, "risk_hits": [] }
+      },
+      "final_model": "mock-echo", "final_tier": 1,
+      "downgrades": [],
+      "baseline_model": "mock-large",
+      "baseline_cost_usd": "0.00015900",
+      "savings_usd": "0.00015470"
+    }
   }
 }
 ```
 
 `metadata.budget.status` is one of `ok`, `warning`, `overridden`, `unchecked` (fail-open).
 `budget_warnings[].kind` is `warning`, `overridden`, or `unchecked`.
+
+`metadata.routing`:
+
+| Field | Meaning |
+|---|---|
+| `model`, `tier` | The router's choice before any budget downgrade |
+| `source` | `explicit` (caller's `model`), `pinned` (feature rule), `routed` (classifier) |
+| `min_tier`, `max_tier` | Bounds from the feature rule and the priority floor |
+| `fallbacks` | Cheaper models the gateway may downgrade to under budget pressure |
+| `reasons` | Why the tier was constrained (feature rule, clamping, escalation) |
+| `classifier` | Present for `routed`: tier, confidence (0–1), reasons and extracted features |
+| `final_model`, `final_tier` | The model that actually served the request |
+| `downgrades` | Each budget-blocked attempt: `model`, `tier`, `blocked_by`, `estimated_cost_usd` |
+| `baseline_model`, `baseline_cost_usd` | The same tokens priced on the strongest model |
+| `savings_usd` | `baseline_cost_usd − cost_usd` (a counterfactual estimate) |
+
+Failed requests store `metadata.routing` in the audit log too (without baseline or savings).
 
 ### Errors
 All gateway errors share this shape (`request_id` matches the audit-log row):
@@ -88,18 +121,21 @@ Budget errors add the limit that was hit (the most-exceeded one if several were)
   }
 }
 ```
+When routing allowed a downgrade, a budget error is only returned after every cheaper
+allowed model was also blocked; the details describe the last (cheapest) attempt.
 
 | Status | `code` | Cause |
 |---|---|---|
 | 400 | `unknown_model` | Model not in registry |
-| 400 | `context_too_long` | Estimated tokens exceed model limit |
-| 402 | `budget_exceeded` | A team/feature daily or monthly limit would be reached (`low`/`normal` priority). Not retryable before `resets_at` |
+| 400 | `context_too_long` | Estimated tokens exceed the limit of the chosen model (or of every allowed candidate when routed) |
+| 402 | `budget_exceeded` | A team/feature daily or monthly limit would be reached (`low`/`normal` priority), after any allowed downgrade. Not retryable before `resets_at` |
 | 402 | `override_required` | Same, for `high`/`critical` priority without `X-Budget-Override`. Retry with the header to proceed |
 | 422 | — | Request body failed validation (FastAPI default shape) |
 | 429 | `provider_error` | Upstream rate limit (retryable) |
 | 500 | `internal_error` | Unexpected gateway bug (logged with traceback) |
 | 502 | `provider_error` | Upstream failure |
-| 503 | `provider_error` | Provider not configured (missing API key) |
+| 503 | `provider_error` | Provider not configured (missing API key) for an explicit or pinned model |
+| 503 | `no_route` | No available model in the allowed tiers satisfies the request (API keys, required capabilities) |
 | 503 | `budget_unavailable` | Redis/Postgres unreachable and `BUDGET_FAIL_MODE=closed` (retryable) |
 | 504 | `provider_error` | Upstream timeout (retryable) |
 
@@ -108,6 +144,48 @@ clears in seconds, which clients retry automatically. 403 means "you are not all
 permissions problem. A spent budget is neither: the caller is authorised and not too fast,
 but their money has run out until the period resets or someone raises the limit.
 `402 Payment Required` says exactly that, and clients won't blindly retry it.
+
+## `POST /v1/route/preview`
+Dry run: which model **would** serve this request, and why. Same body as `/v1/chat`.
+No provider call, no budget reservation, no audit row. Use it to tune `config/routing.yaml`.
+
+```json
+{
+  "routing": { "model": "mock-large", "tier": 3, "source": "routed", "min_tier": 1,
+               "max_tier": 3, "fallbacks": ["mock-medium", "mock-echo"], "reasons": [],
+               "classifier": { "name": "rules-v1", "tier": 3, "confidence": 0.85,
+                               "reasons": ["tier-3 keywords: analyze, trade-offs"],
+                               "features": { "...": "..." } } },
+  "estimated_input_tokens": 14,
+  "worst_case_cost_usd": "0.00772200",
+  "baseline_model": "mock-large",
+  "baseline_worst_case_cost_usd": "0.00772200"
+}
+```
+Errors are the same as for `/v1/chat` routing: `400 unknown_model`, `400 context_too_long`,
+`503 no_route`, `422` validation.
+
+## `GET /v1/routing`
+The active routing policy and the providers currently usable (API key set, or keyless).
+```json
+{
+  "profile": "dev",
+  "tiers": {
+    "1": { "description": "Extraction and formatting", "models": ["mock-echo"] },
+    "2": { "description": "Summarisation and classification", "models": ["mock-medium"] },
+    "3": { "description": "Reasoning-heavy or high-risk work", "models": ["mock-large"] }
+  },
+  "baseline_model": "mock-large",
+  "budget_downgrade": true,
+  "priority_min_tier": {},
+  "features": {
+    "contract-review": { "min_tier": 3, "max_tier": 3, "pin_model": null, "requires": [],
+                         "budget_downgrade": false,
+                         "reason": "Legal review: correctness matters more than cost" }
+  },
+  "available_providers": ["mock", "ollama"]
+}
+```
 
 ## `GET /v1/usage`
 Reads the audit trail, newest first.
@@ -128,7 +206,8 @@ Reads the audit trail, newest first.
       "feature": "summarize", "priority": "normal", "model": "mock-echo", "provider": "mock",
       "input_tokens": 3, "output_tokens": 10, "estimated_cost_usd": "0.00020550",
       "cost_usd": "0.00000430", "latency_ms": 57.9, "status": "success",
-      "error_code": null, "override_reason": null, "metadata": { "...": "..." } }
+      "error_code": null, "override_reason": null,
+      "metadata": { "routing": { "...": "..." }, "...": "..." } }
   ],
   "totals": { "count": 128, "cost_usd": "0.00061200", "input_tokens": 410, "output_tokens": 1290 },
   "limit": 50, "offset": 0, "has_more": true
@@ -136,7 +215,8 @@ Reads the audit trail, newest first.
 ```
 `totals` cover **all** rows matching the filters, not just the current page. Rows are written
 by a background task just after each response, so a row can appear a few milliseconds after
-its `/v1/chat` response.
+its `/v1/chat` response. `model` is the model that actually served the request (after any
+downgrade).
 
 ## `GET /v1/budgets`
 ```json
@@ -181,11 +261,13 @@ startup). Resets every in-flight hold to 0, so run it when traffic is quiet.
 
 ## `GET /v1/models`
 Returns `{ "models": [ ModelSpec, ... ] }` with name, provider, tier, prices per MTok (strings),
-latency estimate, max context and supported features.
+latency estimate, max context and supported features. Includes the mock models
+`mock-echo`, `mock-medium` and `mock-large` (tiers 1–3) used by the `dev` routing profile.
 
 ## `GET /health`
 Always `200` while the process is up; reports dependencies without failing on them.
 ```json
-{ "status": "ok", "postgres": "ok", "redis": "ok", "budget_fail_mode": "open" }
+{ "status": "ok", "postgres": "ok", "redis": "ok", "budget_fail_mode": "open",
+  "routing_profile": "dev" }
 ```
 `status` is `degraded` when a dependency is down, e.g. `"redis": "down (ConnectionError)"`.

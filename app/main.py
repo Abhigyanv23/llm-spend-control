@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from starlette.background import BackgroundTask
 
 from app.api import budgets as budgets_api
+from app.api import routing as routing_api
 from app.api import usage as usage_api
 from app.audit import AuditLogger, AuditRecord
 from app.budgets import BudgetService, RedisBudgetStore
@@ -24,6 +25,7 @@ from app.errors import GatewayError
 from app.gateway import Gateway
 from app.providers import build_adapters
 from app.registry import ModelRegistry
+from app.routing import Router, available_providers, load_routing_config
 from app.schemas import ChatRequest, ChatResponse
 
 logger = logging.getLogger("app")
@@ -45,24 +47,33 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Startup: build every long-lived dependency once and wire them together
+        registry = ModelRegistry(settings.model_registry_path)
+        # Validate routing config BEFORE opening connections: a typo fails startup immediately
+        routing_config = load_routing_config(settings.routing_config_path,
+                                             settings.routing_profile, registry)
+        providers = available_providers(settings)
+        router = Router(registry, routing_config, providers)
+        logger.info("Routing profile '%s' loaded; available providers: %s",
+                    routing_config.profile, ", ".join(sorted(providers)))
+
         client = httpx.AsyncClient(timeout=settings.request_timeout_s)
         db_engine = engine or create_engine(settings.database_url)
         redis = redis_client or create_redis(settings.redis_url, settings.redis_timeout_s)
         session_factory = create_session_factory(db_engine)
 
-        registry = ModelRegistry(settings.model_registry_path)
         store = RedisBudgetStore(redis)
         budgets = BudgetService(store, session_factory,
                                 warn_threshold=settings.budget_warn_threshold,
                                 fail_mode=settings.budget_fail_mode)
         app.state.settings = settings
         app.state.registry = registry
+        app.state.router = router
         app.state.engine = db_engine
         app.state.redis = redis
         app.state.session_factory = session_factory
         app.state.budgets = budgets
         app.state.audit = AuditLogger(session_factory)
-        app.state.gateway = Gateway(registry, build_adapters(client, settings), budgets)
+        app.state.gateway = Gateway(registry, build_adapters(client, settings), budgets, router)
 
         try:
             await store.load_scripts()
@@ -84,9 +95,10 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
         if engine is None:
             await db_engine.dispose()
 
-    app = FastAPI(title="LLM Spend Control Center", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="LLM Spend Control Center", version="0.3.0", lifespan=lifespan)
     app.include_router(usage_api.router)
     app.include_router(budgets_api.router)
+    app.include_router(routing_api.router)
 
     @app.exception_handler(GatewayError)
     async def gateway_error_handler(request: Request, exc: GatewayError):
@@ -131,7 +143,8 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
             checks["redis"] = f"down ({type(exc).__name__})"
         status = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
         return {"status": status, **checks,
-                "budget_fail_mode": request.app.state.settings.budget_fail_mode}
+                "budget_fail_mode": request.app.state.settings.budget_fail_mode,
+                "routing_profile": request.app.state.router.config.profile}
 
     @app.get("/v1/models")
     async def list_models(request: Request):

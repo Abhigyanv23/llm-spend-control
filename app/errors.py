@@ -46,6 +46,15 @@ class ProviderError(GatewayError):
                          retryable=retryable, extra={"provider": provider})
 
 
+class NoRouteError(GatewayError):
+    """503: no available model satisfies the request's routing constraints
+    (e.g. required capabilities, or no API key for any candidate in the allowed tiers)."""
+    audit_status = "provider_error"
+
+    def __init__(self, message: str):
+        super().__init__(message, status_code=503, code="no_route")
+
+
 class BudgetExceededError(GatewayError):
     """402: the request would push a team/feature past a limit and cannot be overridden."""
     audit_status = "budget_blocked"

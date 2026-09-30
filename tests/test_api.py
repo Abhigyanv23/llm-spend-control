@@ -22,7 +22,8 @@ async def usage(api, **params) -> dict:
 
 async def test_health_and_models(api):
     health = (await api.get("/health")).json()
-    assert health == {"status": "ok", "postgres": "ok", "redis": "ok", "budget_fail_mode": "open"}
+    assert health == {"status": "ok", "postgres": "ok", "redis": "ok",
+                      "budget_fail_mode": "open", "routing_profile": "dev"}
     models = (await api.get("/v1/models")).json()["models"]
     assert next(m for m in models if m["name"] == "mock-echo")["input_cost_per_mtok"] == "0.1"
 
