@@ -24,5 +24,9 @@ class Settings(BaseSettings):
     budget_fail_mode: Literal["open", "closed"] = "open"   # behaviour when Redis is down
     reconcile_on_startup: bool = True
 
+    # Phase 3: routing
+    routing_config_path: str = "config/routing.yaml"
+    routing_profile: str = "dev"        # "dev" = mock model per tier, "production" = real providers
+
 
 settings = Settings()
