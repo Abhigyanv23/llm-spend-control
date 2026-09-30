@@ -1,0 +1,48 @@
+defaults:
+  model: mock-echo          # used when no model is requested (router replaces this in Phase 3)
+
+models:
+  - name: mock-echo
+    provider: mock
+    tier: 1
+    input_cost_per_mtok: 0.10
+    output_cost_per_mtok: 0.40
+    avg_latency_ms: 50
+    max_context: 32000
+    supports: []
+
+  - name: llama3.2
+    provider: ollama
+    tier: 1
+    input_cost_per_mtok: 0.0
+    output_cost_per_mtok: 0.0
+    avg_latency_ms: 1500
+    max_context: 128000
+    supports: []
+
+  - name: gpt-4o-mini
+    provider: openai
+    tier: 1
+    input_cost_per_mtok: 0.15
+    output_cost_per_mtok: 0.60
+    avg_latency_ms: 900
+    max_context: 128000
+    supports: [tools, vision]
+
+  - name: claude-haiku-4-5
+    provider: anthropic
+    tier: 2
+    input_cost_per_mtok: 1.00
+    output_cost_per_mtok: 5.00
+    avg_latency_ms: 1000
+    max_context: 200000
+    supports: [tools, vision]
+
+  - name: claude-sonnet-5-5
+    provider: anthropic
+    tier: 3
+    input_cost_per_mtok: 3.00
+    output_cost_per_mtok: 15.00
+    avg_latency_ms: 2500
+    max_context: 200000
+    supports: [tools, vision]
