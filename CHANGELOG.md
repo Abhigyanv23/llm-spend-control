@@ -2,6 +2,31 @@
 
 All notable changes, grouped by build phase.
 
+## [0.3.0] - Phase 3: Request Complexity Routing
+
+### Added
+- Tiered model routing: tier 1 extraction/formatting, tier 2 summarisation/classification,
+  tier 3 reasoning-heavy or high-risk work.
+- `config/routing.yaml`: per-profile tier candidates (`dev` mocks, `production` real models),
+  feature rules (`min_tier`, `max_tier`, `pin_model`, `requires`, `budget_downgrade`),
+  optional `priority_min_tier`, and classifier keywords. Validated at startup.
+- Rule-based complexity classifier (`rules-v1`) with confidence scores and reasons.
+- Router with a fixed decision order: explicit > pinned > classifier within bounds.
+- Budget-aware downgrade: a budget-blocked request falls back to a cheaper allowed tier.
+- Counterfactual baseline cost and savings on every successful request.
+- `GET /v1/routing` (active policy + available providers).
+- `POST /v1/route/preview` (dry-run routing decision; no call, reservation or audit row).
+- `503 no_route` error when no available model satisfies the constraints.
+- Mock models `mock-medium` (tier 2) and `mock-large` (tier 3), priced like real tiers.
+- New settings `ROUTING_CONFIG_PATH`, `ROUTING_PROFILE`.
+- `tests/test_classifier.py`, `tests/test_router.py`, `tests/test_routing_api.py` (33 tests).
+- `scripts/smoke_routing.py`: live routing checks against Postgres + Redis.
+
+### Changed
+- Requests without `model` are now routed instead of using `defaults.model`.
+- `metadata.routing` added to `/v1/chat` responses and audit rows.
+- `/health` now includes `routing_profile`.
+
 ## [0.2.0] - Phase 2: Cost Tracking and Budgets
 
 ### Added
