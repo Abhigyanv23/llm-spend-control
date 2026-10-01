@@ -2,8 +2,15 @@ from decimal import Decimal
 
 import pytest
 
-from app.money import (NANOS_PER_USD, format_usd, nanos_to_usd, quantize_usd, to_decimal,
-                       usd_str, usd_to_nanos)
+from app.money import (
+    NANOS_PER_USD,
+    format_usd,
+    nanos_to_usd,
+    quantize_usd,
+    to_decimal,
+    usd_str,
+    usd_to_nanos,
+)
 
 
 def test_float_drift_is_real_and_decimal_avoids_it():

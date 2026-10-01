@@ -30,16 +30,23 @@ from app.budgets.periods import month_period  # noqa: E402
 from app.budgets.policies import upsert_policy  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.db import create_engine, create_session_factory  # noqa: E402
-from app.db.models import (BudgetAlert, BudgetPolicy, RequestLog, RoutingMiss,  # noqa: E402
-                           Verification)
+from app.db.models import (  # noqa: E402
+    BudgetAlert,
+    BudgetPolicy,
+    RequestLog,
+    RoutingMiss,
+    Verification,
+)
 from app.fingerprint import fingerprint_text  # noqa: E402
 from app.money import quantize_usd  # noqa: E402
 from app.registry import ModelRegistry  # noqa: E402
 
 # team -> (base requests per weekday, monthly limit USD or None, features)
+# Feature names avoid those with seeded budgets (summarize, chat-assistant): a FEATURE budget
+# applies across all teams, so demo traffic would otherwise consume a real budget.
 DEMO_TEAMS = {
-    "demo-search":    (90, Decimal("60.00"), ["summarize", "extraction"]),
-    "demo-support":   (70, Decimal("45.00"), ["chat-assistant", "summarize"]),
+    "demo-search":    (90, Decimal("60.00"), ["summaries", "extraction"]),
+    "demo-support":   (70, Decimal("45.00"), ["assistant", "summaries"]),
     "demo-research":  (30, Decimal("40.00"), ["analysis", "code-review"]),
     "demo-marketing": (14, None, ["copywriting", "translation"]),   # limit set from its trend
 }
@@ -51,10 +58,10 @@ TEMPLATES = {
     "extraction": [("Extract the invoice number and total from document {n}", 1, 400, 60),
                    ("Convert this address list {n} to CSV", 1, 600, 200),
                    ("Fix typos in paragraph {n}", 1, 250, 220)],
-    "summarize": [("Summarize support ticket #{n} in three bullet points", 2, 900, 150),
+    "summaries": [("Summarize support ticket #{n} in three bullet points", 2, 900, 150),
                   ("Summarise the meeting notes from week {n}", 2, 1800, 300),
                   ("Give me the key points of article {n}", 2, 1500, 250)],
-    "chat-assistant": [("How do I reset my password? (session {n})", 1, 300, 180),
+    "assistant": [("How do I reset my password? (session {n})", 1, 300, 180),
                        ("Explain why my order {n} was delayed", 2, 500, 300),
                        ("Hi, what are your opening hours? {n}", 1, 120, 60)],
     "analysis": [("Analyze the trade-offs between design A and B for project {n}", 3, 2200, 900),
@@ -174,7 +181,8 @@ def one_request(rng, registry, team, feature, text, true_tier, tin, tout, create
             reference_model=reference.name, judge="similarity-sequence", verdict=verdict,
             score=round(rng.uniform(0.85, 1.0) if verdict == "pass" else rng.uniform(0.1, 0.7), 4),
             reason="demo data", verification_cost_usd=reference.cost(input_tokens, output_tokens),
-            attempts=1, meta={"demo": True}))
+            attempts=1, meta={"demo": True, "budget": {"team_id": "demo-verifier",
+                                                       "feature": "demo-verification"}}))
         if verdict == "fail":
             misses.append(RoutingMiss(
                 request_id=request_id, created_at=created + timedelta(seconds=300),

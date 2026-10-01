@@ -24,8 +24,10 @@ def team(name: str) -> str:
 
 def chat(headers: dict | None = None, **overrides) -> httpx.Response:
     body = {
-        "team_id": "search",
-        "feature": "summarize",
+        # Fresh ids per run: the seeded "summarize" FEATURE budget is shared by all teams, so
+        # using it made these checks depend on whatever else ran that day
+        "team_id": f"smoke-{RUN}-p1",
+        "feature": f"smoke-{RUN}-p1",
         "messages": [{"role": "user", "content": "Hello gateway"}],
     }
     body.update(overrides)

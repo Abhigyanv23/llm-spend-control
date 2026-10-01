@@ -5,8 +5,14 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.analytics.common import (ZERO, AnalyticsFilter, dialect_of, money, percentile_cont,
-                                  ratio, wilson_interval)
+from app.analytics.common import (
+    AnalyticsFilter,
+    dialect_of,
+    money,
+    percentile_cont,
+    ratio,
+    wilson_interval,
+)
 from app.db.models import RequestLog, RoutingMiss, Verification
 
 

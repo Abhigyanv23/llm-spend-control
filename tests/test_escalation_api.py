@@ -174,8 +174,8 @@ async def test_quality_endpoints_and_export(sampled_api, tmp_path):
     filtered = (await client.get("/v1/quality", params={"feature": "nope"})).json()
     assert filtered["verification"]["verified"] == 0 and filtered["verification"]["miss_rate"] is None
 
-    from scripts.export_misses import export
     from app.quality.reports import QualityFilter
+    from scripts.export_misses import export
     out = tmp_path / "misses.jsonl"
     assert await export(app.state.session_factory, out, QualityFilter()) == 1
     [example] = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]

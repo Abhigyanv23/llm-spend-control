@@ -11,6 +11,7 @@ redeployed without touching the API.
 """
 import argparse
 import asyncio
+import contextlib
 import logging
 import os
 import signal
@@ -54,10 +55,8 @@ def install_stop_handlers(stop: asyncio.Event) -> None:
 
     for name in ("SIGINT", "SIGTERM", "SIGBREAK"):       # SIGBREAK = Ctrl+Break on Windows
         if hasattr(signal, name):
-            try:
+            with contextlib.suppress(ValueError, OSError):    # not settable on this platform
                 signal.signal(getattr(signal, name), handler)
-            except (ValueError, OSError):
-                pass
 
 
 async def amain(args: argparse.Namespace) -> int:

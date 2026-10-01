@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.db.models import RoutingMiss, Verification
 from app.errors import ProviderError
@@ -264,14 +264,24 @@ async def test_reconciliation_keeps_verification_spend(queue, make_worker, sessi
     """Regression: startup reconciliation rebuilt counters from request_logs only, so every
     API restart reset the verifier budget to $0 and its cap never held."""
     from app.budgets import BudgetService
-    budgets = BudgetService(store, session_factory,
-                            verifier_scope=("quality-verifier", "verification"))
+    budgets = BudgetService(store, session_factory)
     await queue.enqueue(await make_job())
     await make_worker().run_once()
     [v] = await rows(session_factory, Verification)
+    assert v.meta["budget"] == {"team_id": "quality-verifier", "feature": "verification"}
+    # A row charged to another verifier budget (e.g. a simulation run), and one with no
+    # recorded budget (legacy/demo): neither may be attributed to quality-verifier
+    async with session_factory() as s:
+        for meta in ({"budget": {"team_id": "sim-x-verifier", "feature": "verification"}}, {}):
+            s.add(Verification(request_id=uuid.uuid4(), team_id="t", feature="f", model="m",
+                               tier=1, routing_source="routed", verdict="pass",
+                               verification_cost_usd=Decimal("5"), meta=meta))
+        await s.commit()
 
     await budgets.reconcile(datetime.now(UTC))          # what every API startup does
     status = await budgets.status("team", "quality-verifier", datetime.now(UTC))
     assert status["day"]["spent_usd"] == v.verification_cost_usd > 0
+    sim = await budgets.status("team", "sim-x-verifier", datetime.now(UTC))
+    assert sim["day"]["spent_usd"] == Decimal("5")
     feature = await budgets.status("feature", "verification", datetime.now(UTC))
-    assert feature["month"]["spent_usd"] == v.verification_cost_usd
+    assert feature["month"]["spent_usd"] == v.verification_cost_usd + Decimal("5")

@@ -169,7 +169,7 @@ def _resolve_reference(raw: str, routing: RoutingConfig, registry: ModelRegistry
 
 def load_quality_config(path: str, registry: ModelRegistry, routing: RoutingConfig,
                         available: set[str], verify_enabled: bool = True) -> QualityConfig:
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
 
     # --- sampling

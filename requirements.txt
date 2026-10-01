@@ -16,7 +16,11 @@ redis>=5.0             # includes redis.asyncio
 streamlit>=1.40
 altair>=5.0            # charts (Vega-Lite); also a Streamlit dependency
 
-# --- Testing ---
+# --- Simulation report (Phase 6): python scripts/build_report.py <run_id> ---
+matplotlib>=3.9
+
+# --- Testing and linting ---
+ruff>=0.6
 pytest>=8.0
 pytest-asyncio>=0.24
 fakeredis[lua]>=2.23   # in-memory Redis; [lua] adds lupa so EVAL/Lua scripts work
