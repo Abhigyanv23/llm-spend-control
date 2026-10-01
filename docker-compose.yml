@@ -1,6 +1,25 @@
-# Local infrastructure for Phase 2. The FastAPI app runs on the host, not in Docker (yet).
+# LLM Spend Control Center: local stack.
+#
+#   docker compose up -d                       Postgres + Redis only (app runs on the host)
+#   docker compose --profile full up -d --build
+#                                              + migrations, gateway, worker, dashboard
+#
 # Variables come from .env (docker compose reads it automatically); defaults after ":-".
+# Inside the compose network, services reach each other by SERVICE NAME (postgres, redis,
+# gateway), not 127.0.0.1: in a container, 127.0.0.1 is the container itself.
 name: llm-spend-control
+
+x-app: &app
+  build: .
+  image: llm-spend-control:dev
+  profiles: ["full"]
+  env_file:
+    - path: .env
+      required: false               # API keys etc. if present; the overrides below always win
+  environment: &app-env
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-spend}:${POSTGRES_PASSWORD:-spend_dev_password}@postgres:5432/${POSTGRES_DB:-spend}
+    REDIS_URL: redis://redis:6379/0
+  restart: unless-stopped
 
 services:
   postgres:
@@ -38,6 +57,51 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+
+  # One-shot: apply migrations and seed example budgets, then exit. The app services wait
+  # for it to finish successfully, so they never start against an old schema.
+  migrate:
+    <<: *app
+    command: ["sh", "-c", "python -m alembic upgrade head && python scripts/seed_budgets.py"]
+    restart: "no"
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  gateway:
+    <<: *app
+    command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8000}:8000"
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    <<: *app
+    command: ["python", "-m", "app.worker"]
+    environment:
+      <<: *app-env
+      WORKER_CONSUMER_NAME: compose-worker
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+
+  dashboard:
+    <<: *app
+    command: ["python", "-m", "streamlit", "run", "dashboard/app.py", "--server.address", "0.0.0.0",
+              "--server.port", "8501", "--server.headless", "true"]
+    environment:
+      <<: *app-env
+      GATEWAY_URL: http://gateway:8000              # the API, by service name
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-8501}:8501"
+    depends_on:
+      gateway: {condition: service_healthy}
 
 volumes:
   pgdata:

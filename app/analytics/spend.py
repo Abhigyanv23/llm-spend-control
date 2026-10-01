@@ -5,8 +5,15 @@ from decimal import Decimal
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.analytics.common import (ZERO, AnalyticsFilter, day_bucket, dialect_of, money, ratio,
-                                  to_date)
+from app.analytics.common import (
+    ZERO,
+    AnalyticsFilter,
+    day_bucket,
+    dialect_of,
+    money,
+    ratio,
+    to_date,
+)
 from app.db.models import RequestLog
 
 GROUP_COLUMNS = {"team": RequestLog.team_id, "feature": RequestLog.feature,

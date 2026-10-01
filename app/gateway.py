@@ -8,8 +8,7 @@ from decimal import Decimal
 
 from app.audit import AuditRecord
 from app.budgets import BudgetService, Reservation
-from app.errors import (BudgetExceededError, ContextTooLongError, GatewayError,
-                        OverrideRequiredError)
+from app.errors import BudgetExceededError, ContextTooLongError, GatewayError, OverrideRequiredError
 from app.fingerprint import prompt_fingerprint, prompt_preview
 from app.money import usd_str
 from app.providers.base import ProviderAdapter, ProviderResult
