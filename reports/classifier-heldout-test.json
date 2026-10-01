@@ -1,0 +1,49 @@
+{
+  "split": "test",
+  "rules-v1": {
+    "n": 301,
+    "accuracy": 0.8339,
+    "under_routed": 23,
+    "over_routed": 27,
+    "confusion": [
+      [
+        121,
+        7,
+        20
+      ],
+      [
+        0,
+        84,
+        0
+      ],
+      [
+        13,
+        10,
+        46
+      ]
+    ]
+  },
+  "rules-v2": {
+    "n": 301,
+    "accuracy": 0.9236,
+    "under_routed": 6,
+    "over_routed": 17,
+    "confusion": [
+      [
+        131,
+        7,
+        10
+      ],
+      [
+        0,
+        84,
+        0
+      ],
+      [
+        6,
+        0,
+        63
+      ]
+    ]
+  }
+}

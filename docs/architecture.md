@@ -1,6 +1,6 @@
 # Architecture
 
-## Current state (after Phase 5)
+## Current state (v1.0.0)
 
 ```mermaid
 flowchart LR
@@ -40,6 +40,44 @@ flowchart LR
 Solid arrows are on the request's critical path; dotted arrows happen after the response, in
 the worker process, or at startup. `routing.yaml` and `quality.yaml` are loaded and validated
 once at startup by `app/bootstrap.py`, the composition root shared by the API and the worker.
+
+## Deployment (Phase 6)
+
+```mermaid
+flowchart LR
+    subgraph compose[docker compose --profile full]
+        PG[(postgres:5432)]
+        RD[(redis:6379)]
+        MG[migrate<br/>alembic upgrade head + seed<br/>one-shot] --> PG
+        GW[gateway :8000] --> PG
+        GW --> RD
+        WK[worker] --> RD
+        WK --> PG
+        DB[dashboard :8501] -->|http://gateway:8000| GW
+    end
+    U[Browser / client] -->|127.0.0.1:8000| GW
+    U -->|localhost:8501| DB
+```
+
+- **One image, three services**: gateway, worker and dashboard run the same image with different
+  commands. `migrate` must finish successfully before they start.
+- **Service names, not 127.0.0.1**: inside the compose network the app reaches `postgres`, `redis`
+  and `gateway` by name; compose overrides the host-oriented URLs from `.env`.
+- **Profiles**: `docker compose up` still starts only Postgres + Redis (local development);
+  `--profile full` adds the app. Ports are bound to 127.0.0.1 and configurable.
+
+## Simulation flow (Phase 6)
+
+```mermaid
+flowchart LR
+    G[generate_workload.py] --> DS[(workload.jsonl<br/>1,000 labelled prompts)]
+    DS --> S[run_simulation.py]
+    S -->|per mode A/B/C: own server,<br/>pinned configs, own team ids,<br/>private verification stream| SV[gateway process]
+    S -->|mode C| WK[app.worker --once]
+    S --> R[(results.jsonl.gz + run.json)]
+    R --> B[build_report.py] --> OUT[report.md · charts · summary.json]
+    DS --> E[evaluate_classifier.py<br/>train vs held-out]
+```
 
 ## Analytics data flow (Phase 5)
 
@@ -285,8 +323,11 @@ imports the web app.
 | Dependency injection | `build_core()` wires everything once; tests inject SQLite + fakeredis |
 | Layering | `api/` (HTTP) → `gateway` (orchestration) → `routing/`, `budgets/`, `quality/`, `audit` (domain) → `db/`, Redis (infrastructure) |
 
-## Planned evolution
+## Beyond v1.0.0
 
-| Phase | Adds |
+| Area | Next step |
 |---|---|
-| 6 | Simulated 1,000-request workload through the full pipeline (incl. verification); savings report net of quality overhead; containers and CI |
+| Security | API keys or OIDC per team; role-based access to budgets and analytics; HMAC-keyed fingerprints |
+| Quality | Verification sampling stratified by request size/cost; an LLM judge on a real-provider slice; a learned classifier trained on routing misses |
+| Scale | Analytics on a read replica or warehouse with daily rollups; Redis Cluster hash tags; a lock around reconciliation for multiple gateway instances; cached policy lookups |
+| Operations | Alerting on miss rate, escalation rate and dead letters; dashboards screenshots in the repo |
