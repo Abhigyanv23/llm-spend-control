@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request
 
 from app.money import usd_str
+from app.quality.escalation import apply_pre_call_escalation
 from app.schemas import ChatRequest
 from app.tokens import estimate_input_tokens
 
@@ -20,10 +21,14 @@ async def route_preview(body: ChatRequest, request: Request):
     reservation, no audit row. Use it to tune config/routing.yaml."""
     r = request.app.state.router
     decision = r.route(body)
+    # Same pre-call escalation as /v1/chat, so the dry run shows what would really happen
+    decision, pre_call = apply_pre_call_escalation(
+        r, request.app.state.quality_config.escalation, body, decision)
     tokens = estimate_input_tokens(body.messages)
     chosen, baseline = r.registry.get(decision.model), r.baseline
     return {
         "routing": decision.metadata(),
+        "pre_call_escalation": pre_call,
         "estimated_input_tokens": tokens,
         "worst_case_cost_usd": usd_str(chosen.worst_case_cost(tokens, body.max_tokens)),
         "baseline_model": baseline.name,

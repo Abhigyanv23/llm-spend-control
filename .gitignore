@@ -4,3 +4,5 @@ __pycache__/
 .env
 .pytest_cache/
 *.db
+# Exported routing misses contain user prompts: never commit them
+*.jsonl
