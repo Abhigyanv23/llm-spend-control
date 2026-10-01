@@ -1,0 +1,53 @@
+escalation:
+  enabled: true
+  max_escalations: 1
+  post_call:
+    checks:
+    - empty
+    - refusal
+    - truncated
+    - invalid_json
+  pre_call:
+    confidence_below: 0.6
+    priorities:
+    - high
+    - critical
+  refusal_patterns:
+  - i'm sorry, but i can't
+  - i am sorry, but i cannot
+  - i can't help with
+  - i cannot help with
+  - i'm unable to
+  - as an ai language model
+privacy:
+  max_prompt_chars: 2000
+  prompt_preview_chars: 120
+  store_prompts: true
+sampling:
+  base_rate: 0.05
+  enabled: true
+  low_confidence_rate: 0.25
+  low_confidence_threshold: 0.6
+  skip_sources:
+  - explicit
+  - pinned
+  - default
+  skip_top_tier: true
+verification:
+  budget:
+    feature: verification
+    team_id: sim-final-v2-C0.05-verifier
+  consumer_group: verifiers
+  dead_letter_stream: quality:verify:sim-final-v2-C0.05-verifier:dead
+  job_timeout_s: 60
+  judge:
+    max_tokens: 300
+    model: auto
+    similarity_method: sequence
+    similarity_threshold: 0.8
+    type: similarity
+  max_attempts: 3
+  maxlen: 10000
+  reference_max_tokens: 1024
+  reference_model: auto
+  stream: quality:verify:sim-final-v2-C0.05-verifier

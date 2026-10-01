@@ -1,0 +1,112 @@
+tier_descriptions:
+  1: Extraction and formatting
+  2: Summarisation and classification
+  3: Reasoning-heavy or high-risk work
+profiles:
+  dev:
+    tiers:
+      1:
+      - mock-echo
+      2:
+      - mock-medium
+      3:
+      - mock-large
+    baseline_model: mock-large
+  production:
+    tiers:
+      1:
+      - gpt-4o-mini
+      - claude-haiku-4-5
+      2:
+      - claude-haiku-4-5
+      3:
+      - claude-sonnet-5-5
+    baseline_model: claude-sonnet-5-5
+budget_downgrade: true
+priority_min_tier: {}
+features:
+  contract-review:
+    min_tier: 3
+    budget_downgrade: false
+    reason: 'Legal review: correctness matters more than cost'
+  code-review:
+    min_tier: 2
+    reason: Code review needs at least a mid-tier model
+  autocomplete:
+    max_tier: 1
+    reason: 'High-volume and latency-sensitive: always the cheapest tier'
+classifier:
+  version: rules-v2
+  long_context_tokens: 6000
+  keywords:
+    1:
+    - extract
+    - format
+    - reformat
+    - convert
+    - parse
+    - fill in
+    - uppercase
+    - lowercase
+    - capitalize
+    - fix typos
+    - fix spelling
+    2:
+    - summarize
+    - summarise
+    - summary
+    - classify
+    - categorize
+    - categorise
+    - sentiment
+    - tag
+    - label
+    - rewrite
+    - paraphrase
+    - translate
+    - key points
+    - outline
+    3:
+    - analyze
+    - analyse
+    - analysis
+    - reason
+    - reasoning
+    - prove
+    - derive
+    - debug
+    - design
+    - architect
+    - architecture
+    - plan
+    - strategy
+    - evaluate
+    - critique
+    - compare
+    - step by step
+    - trade-off
+    - tradeoff
+    - root cause
+    - explain why
+  risk_keywords:
+  - legal
+  - contract
+  - lawsuit
+  - liability
+  - medical
+  - diagnosis
+  - dosage
+  - prescription
+  - financial advice
+  - investment
+  - tax
+  - compliance
+  - gdpr
+  - security vulnerability
+  - production incident
+  structured_output_keywords:
+  - json
+  - yaml
+  - csv
+  - xml
+  - table

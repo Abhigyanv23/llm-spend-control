@@ -1,348 +1,183 @@
 # LLM Spend Control Center
 
-A routing and budgeting gateway that sits in front of LLM providers (OpenAI, Anthropic, Ollama).
-It tracks usage per team and feature, routes requests to cost-effective models, checks whether
-the cheap answers were good enough, and warns or blocks usage when budgets are at risk.
+[![CI](https://github.com/Abhigyanv23/llm-spend-control/actions/workflows/ci.yml/badge.svg)](https://github.com/Abhigyanv23/llm-spend-control/actions/workflows/ci.yml)
 
-> Portfolio project exploring LLMOps: cost optimisation, model routing, budget enforcement,
-> quality verification, and the trade-off between cost and answer quality.
+A gateway in front of LLM providers (OpenAI, Anthropic, Ollama) that routes every request to the
+cheapest model tier that can handle it, enforces per-team and per-feature budgets *before* money is
+spent, checks a sample of cheap answers against a stronger model, and shows it all on a cost
+dashboard.
 
-## Why
+> **Reduced simulated LLM spend by 40.3% (net of verification; 63.7% gross) while maintaining a
+> 97.4% verification pass rate (95% CI 93.4–99.0%), with 98.0% of requests served at or above
+> their required model tier.**
+> 1,000 labelled prompts, mock models priced like real tiers. Read the
+> [case study](docs/case-study.md) for what that does and does not prove.
 
-Sending every request to the strongest model is simple but expensive. Most production LLM
-traffic (extraction, formatting, short summaries) doesn't need a frontier model. This gateway
-makes cost visible, enforceable, and optimisable without every calling service having to care,
-and measures whether the cheaper answers are actually good enough.
+## Architecture
 
-## Features
-
-| Feature | Status |
-|---|---|
-| Unified request/response schema across providers | ✅ Phase 1 |
-| Model registry (prices, tiers, context limits) in YAML | ✅ Phase 1 |
-| Provider adapters: OpenAI, Anthropic, Ollama, Mock | ✅ Phase 1 |
-| Normalised error handling (retryable vs non-retryable) | ✅ Phase 1 |
-| Request audit log in PostgreSQL (every request, incl. failures and blocks) | ✅ Phase 2 |
-| Exact money: `Decimal` / `NUMERIC(14,8)` / integer nano-dollars in Redis | ✅ Phase 2 |
-| Per-team and per-feature daily & monthly budgets | ✅ Phase 2 |
-| Atomic reserve-then-settle enforcement (Redis Lua) | ✅ Phase 2 |
-| Warnings at 80%, blocks at 100%, audited overrides for high priority | ✅ Phase 2 |
-| Reconciliation of Redis counters from Postgres | ✅ Phase 2 |
-| Usage and budget APIs (`/v1/usage`, `/v1/budgets`) | ✅ Phase 2 |
-| Complexity-based model routing (3 tiers, rule-based classifier with confidence and reasons) | ✅ Phase 3 |
-| Routing policy in `config/routing.yaml`: profiles, feature rules, validated at startup | ✅ Phase 3 |
-| Budget-aware downgrade: cheaper allowed tier before a 402 block | ✅ Phase 3 |
-| Savings vs "everything on the strongest model" on every request | ✅ Phase 3 |
-| Routing APIs (`/v1/routing`, `/v1/route/preview` dry run) | ✅ Phase 3 |
-| Deterministic sampling of cheap answers for async verification (10% base, 50% when unsure) | ✅ Phase 4 |
-| Verification queue on Redis Streams + worker process (`python -m app.worker`) | ✅ Phase 4 |
-| Judges: similarity (dev) and LLM-as-judge (production), Strategy pattern | ✅ Phase 4 |
-| Routing misses stored as labelled data; JSONL export | ✅ Phase 4 |
-| Synchronous escalation: pre-call tier bump + post-call cascade (empty, refusal, truncated, bad JSON) | ✅ Phase 4 |
-| Verification spend capped by its own budget; net savings after quality overhead | ✅ Phase 4 |
-| Quality APIs (`/v1/quality`, `/v1/quality/misses`, `/v1/quality/queue`) | ✅ Phase 4 |
-| Analytics columns + backfill (tier, source, escalation, baseline cost, prompt fingerprint) | ✅ Phase 5 |
-| Analytics API: spend series, projections, top patterns, savings, quality, latency, errors | ✅ Phase 5 |
-| Month-end projections (run-rate, 7-day, EWMA), burn-down, exhaustion date per budget | ✅ Phase 5 |
-| Gross vs net savings (after verification spend); Wilson intervals; p50/p95/p99 latency | ✅ Phase 5 |
-| Streamlit cost dashboard over the analytics API; deterministic demo data | ✅ Phase 5 |
-| 1,000-request simulation & savings report | ⏳ Phase 6 |
-
-## Tech Stack
-
-Python 3.11+ · FastAPI · httpx (async) · Pydantic v2 · PyYAML · PostgreSQL 16 · SQLAlchemy 2.0
-(async) + asyncpg · Alembic · Redis 7 (Lua scripts, Streams) · Streamlit + Altair · Docker Compose
-· pytest + fakeredis
-
-## Quickstart
-
-Prerequisites: Python 3.11+, Docker Desktop (running).
-
-```powershell
-python -m venv .venv
-.venv\Scripts\activate                       # Linux/Mac: source .venv/bin/activate
-python -m pip install -r requirements.txt
-copy .env.example .env                       # Linux/Mac: cp .env.example .env
-
-docker compose up -d                         # Postgres 16 + Redis 7
-docker compose ps                            # wait until both show "(healthy)"
-
-python -m alembic upgrade head               # create tables (migrations 0001 + 0002)
-python scripts/seed_budgets.py               # example budget policies (incl. quality-verifier)
-python -m uvicorn app.main:app --reload      # terminal 1: the API
-python -m app.worker                         # terminal 2: the verification worker
-python -m streamlit run dashboard/app.py     # terminal 3: the cost dashboard
-```
-
-Open **http://127.0.0.1:8000/docs** for the interactive API and **http://localhost:8501** for the
-dashboard. The worker is optional: without it, sampled jobs simply wait in the queue until one
-runs. For a dashboard with content right away: `python scripts/seed_demo_data.py`.
-
-### Tests
-
-```powershell
-python -m pytest                             # unit + in-process API tests (no Docker needed)
-python scripts/smoke_test.py                 # end-to-end: gateway + budgets (running server)
-python scripts/smoke_routing.py              # end-to-end: routing (running server, ROUTING_PROFILE=dev)
-python scripts/smoke_quality.py              # end-to-end: escalation, queue, worker, quality API
-python scripts/smoke_dashboard.py            # end-to-end: analytics API + headless dashboard
-```
-
-`pytest` uses fakeredis and SQLite, so it runs anywhere in seconds. The smoke tests exercise
-the real Postgres + Redis. They create their own tiny budgets on fresh team ids, so they can
-be re-run any number of times. `smoke_quality.py` runs `python -m app.worker --once` itself.
-
-### Example requests
-
-Linux/Mac (bash):
-```bash
-curl -X POST http://127.0.0.1:8000/v1/chat \
-  -H "Content-Type: application/json" \
-  -d '{"team_id":"search","feature":"summarize","messages":[{"role":"user","content":"Hello gateway"}]}'
-```
-
-Windows (PowerShell):
-```powershell
-$body = @{ team_id = "search"; feature = "summarize"
-           messages = @(@{ role = "user"; content = "Hello gateway" }) } | ConvertTo-Json -Depth 5
-Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/chat -Method Post -ContentType "application/json" -Body $body
-
-# Set a budget, then check it
-Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/budgets/team/search -Method Put `
-  -ContentType "application/json" -Body '{"daily_limit_usd": "5.00", "monthly_limit_usd": "100.00"}'
-Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/budgets/team/search/status
-
-# High-priority request that is allowed past an exhausted budget
-Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/chat -Method Post -ContentType "application/json" `
-  -Headers @{ "X-Budget-Override" = "incident INC-42" } `
-  -Body '{"team_id":"demo-tiny","feature":"summarize","priority":"high","max_tokens":2000,"messages":[{"role":"user","content":"hi"}]}'
-```
-
-## Routing
-
-Requests **without** a `model` field are routed by complexity. Requests **with** one are
-honoured as-is.
-
-| Tier | Work | `dev` profile | `production` profile |
-|---|---|---|---|
-| 1 | Extraction and formatting | `mock-echo` | `gpt-4o-mini`, then `claude-haiku-4-5` |
-| 2 | Summarisation and classification | `mock-medium` | `claude-haiku-4-5` |
-| 3 | Reasoning-heavy or high-risk | `mock-large` | `claude-sonnet-5-5` |
-
-Decision order: **explicit model** > **pinned feature** > **classifier tier** clamped to the
-feature's `[min_tier, max_tier]` (and an optional priority floor). Within a tier, the first
-candidate that is available (API key set), fits the context window and has the required
-capabilities is chosen. When a budget would block the request, the gateway first tries the
-cheaper allowed tiers (unless the feature sets `budget_downgrade: false`).
-
-The policy lives in [`config/routing.yaml`](config/routing.yaml): tier candidates per profile,
-feature rules (`min_tier`, `max_tier`, `pin_model`, `requires`, `budget_downgrade`) and
-classifier keywords. It is validated against `config/models.yaml` at startup.
-
-See how a prompt would be routed without calling any model:
-
-```powershell
-$body = @{ team_id = "demo"; feature = "playground"
-           messages = @(@{ role = "user"; content = "Analyze the trade-offs of this design" }) } | ConvertTo-Json -Depth 5
-(Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/route/preview -Method Post `
-  -ContentType "application/json" -Body $body).routing
-```
-
-Every successful `/v1/chat` response (and audit row) carries `metadata.routing`: tier, source,
-reasons, classifier features and confidence, any budget downgrades, and the baseline cost and
-savings versus the strongest model.
-
-## Quality checks and escalation
-
-Routing is a guess. Phase 4 checks it in two ways, configured in
-[`config/quality.yaml`](config/quality.yaml):
-
-**1. Asynchronous verification (measurement).** After a successful routed response on tier 1
-or 2, the gateway decides deterministically (a hash of the request id) whether to sample it:
-10% normally, 50% when the classifier was unsure. Sampled jobs go to a Redis Stream. The
-worker re-asks a stronger **reference model** (first usable tier-3 model), a **judge** compares
-the two answers (`similarity` in dev, `llm` in production), and the verdict is stored in
-`verifications`. A failed cheap answer is also stored as a **routing miss**: labelled data for
-a future learned classifier.
-
-```powershell
-python -m app.worker                 # continuous; Ctrl+C once = finish the batch and stop
-python -m app.worker --once          # drain what's queued now, print a summary, exit
-python scripts/export_misses.py --out misses.jsonl     # routing misses as JSONL
-```
-
-Delivery is at-least-once (ack after the result is stored) with idempotency via a UNIQUE
-`request_id`; failed jobs are retried after `job_timeout_s` and dead-lettered after
-`max_attempts`. Verification calls are real spend, so they are reserved and settled against
-their own budget (`quality-verifier` / `verification`): when it is exhausted, verifications are
-recorded as `skipped`.
-
-**2. Synchronous escalation (correction), a cascade inside `/v1/chat`.**
-- *Pre-call*: a `high`/`critical` request the classifier is unsure about (confidence < 0.6)
-  starts one tier higher. Still one call.
-- *Post-call*: if the cheap answer is empty, a refusal, cut off (`finish_reason` length), or
-  invalid JSON when JSON was asked for, the request is retried once on the next tier up. Each
-  attempt is reserved and settled separately; the audit row has the summed cost and every
-  attempt in `metadata.escalation`. If the escalation is blocked by the budget, the original
-  answer is returned with a note: escalation never fails a request.
-
-In the `dev` profile, mocks fail realistically for free: `mock-echo` only "understands" the
-first 200 characters (`mock-medium` 1,000, `mock-large` 4,000), and tier-1 mocks honour test
-directives in the prompt: `[[mock:empty]]`, `[[mock:refuse]]`, `[[mock:truncate]]`,
-`[[mock:badjson]]`.
-
-```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/v1/quality"          # miss rate ± margin, escalations, net savings
-Invoke-RestMethod "http://127.0.0.1:8000/v1/quality/misses"   # routing misses (prompt preview only)
-Invoke-RestMethod "http://127.0.0.1:8000/v1/quality/queue"    # stream length, pending, dead letters
-```
-
-**Verification costs money.** In our dev runs, verifying long prompts at a 50% sample rate
-cost 20× to 90× the requests being checked, turning net savings negative. Sampling rates are
-a budget decision; `/v1/quality` reports `net_savings_usd` after verification spend.
-
-## Cost dashboard
-
-```powershell
-python scripts/seed_demo_data.py             # optional: 45 days of demo traffic (demo-* teams)
-python -m streamlit run dashboard/app.py     # http://localhost:8501
-python scripts/seed_demo_data.py --reset     # remove the demo data again
+```mermaid
+flowchart LR
+    C[Client services] -->|POST /v1/chat| GW[Gateway]
+    GW --> RT[Router<br/>3 tiers, rules-v2]
+    GW --> BS[Budgets<br/>reserve then settle]
+    BS -->|atomic Lua| RD[(Redis<br/>counters + stream)]
+    BS --> PG[(PostgreSQL<br/>source of truth)]
+    GW --> AD[Provider adapters<br/>OpenAI · Anthropic · Ollama · mock]
+    GW -->|post-call checks| CS[Cascade<br/>one tier up]
+    GW -.sample.-> RD
+    RD -.-> WK[Verification worker<br/>reference model + judge]
+    WK --> PG
+    GW -.audit.-> PG
+    PG --> AN[Analytics API] --> DB[Streamlit dashboard]
 ```
 
 ![Dashboard overview](docs/images/dashboard-overview.png)
 *(Screenshot placeholder: add `docs/images/dashboard-overview.png`.)*
 
-| Tab | Shows |
-|---|---|
-| Overview | Spend today / month-to-date, projected month end, net savings, verifier pass rate (95% CI), escalation and error rates, scopes at risk, active budget alerts |
-| Spend | Daily cost by team / feature / model (zero-filled, UTC), cost by model, most expensive prompt patterns |
-| Budgets | Run-rate, 7-day and EWMA projections vs monthly limits, status, exhaustion date, burn-down chart |
-| Savings | Baseline (all on the strongest model) vs actual vs actual + verification; gross and net savings by feature and tier |
-| Routing quality | Tier mix, pass rate per model with Wilson intervals, escalations, downgrades/blocks/overrides, routing misses |
-| Performance | p50/p95/p99 latency by model, error rate by provider and code |
+## Quickstart
 
-The dashboard reads **only** from `/v1/analytics/*` (set `GATEWAY_URL` to point it elsewhere);
-responses are cached for `ANALYTICS_CACHE_TTL_S` seconds and stamped with "data as of".
+Everything in containers (needs Docker Desktop):
 
-### Troubleshooting
+```powershell
+git clone https://github.com/Abhigyanv23/llm-spend-control.git
+cd llm-spend-control
+docker compose --profile full up -d --build      # Postgres, Redis, migrations, API, worker, dashboard
+docker compose exec gateway python scripts/seed_demo_data.py    # optional: 45 days of demo traffic
+```
 
-| Symptom | Cause | Fix |
+API: **http://127.0.0.1:8000/docs** · Dashboard: **http://localhost:8501**
+
+Local development (Windows PowerShell; Linux/Mac use the same Python commands):
+
+```powershell
+.\scripts\dev.ps1 setup      # venv, dependencies, .env
+.\scripts\dev.ps1 up         # Postgres + Redis in Docker
+.\scripts\dev.ps1 migrate    # alembic upgrade head
+.\scripts\dev.ps1 seed       # example budgets + demo data
+.\scripts\dev.ps1 serve      # API (then: worker, dashboard in other terminals)
+```
+
+## Features
+
+| Area | What it does | Phase |
 |---|---|---|
-| `getaddrinfo failed` during `pip install` | No DNS/internet, or a proxy is required | Check `nslookup pypi.org`; use `--proxy` or another network |
-| `ModuleNotFoundError` with a traceback path outside `.venv` | A global `python`/`uvicorn` ran instead of the venv's | Activate the venv (`.venv\Scripts\Activate.ps1`); check `(Get-Command python).Source` |
-| `ImportError: cannot import name X` | File exists but doesn't define `X` (unsaved or wrong file) | Check the file's contents; save it |
-| `can't open file ...scripts\...` / `No 'script_location' key found` | Running from the wrong folder | `cd` into the project folder (where `alembic.ini` is) |
-| `Cannot bind parameter 'Headers'` in PowerShell | `curl` is an alias for `Invoke-WebRequest` | Use `Invoke-RestMethod` (above) or the smoke test scripts |
-| Slow installs / "file in use" errors | Project inside a OneDrive-synced folder | Move the project outside OneDrive and recreate `.venv` |
-| `docker: command not found` / `error during connect` | Docker Desktop not installed or not running (Windows Home also needs WSL 2) | Start Docker Desktop, wait for "Engine running", open a **new** terminal (restart VS Code) |
-| `Bind for 127.0.0.1:5432 failed: port is already allocated` | A local Postgres (or another container) uses 5432 | Set `POSTGRES_PORT=5433` in `.env` and use `:5433` in `DATABASE_URL` |
-| `password authentication failed for user "spend"` | Password changed after the volume was created (it's only applied on first init) | `docker compose down -v` (deletes data) then `up -d`, or keep the old password |
-| `ConnectionRefusedError` / `[WinError 1225]` from asyncpg or Alembic | Postgres container not running/healthy yet | `docker compose ps`; wait for `(healthy)`; `docker compose logs postgres` |
-| `relation "request_logs"` (or `"verifications"`) `does not exist` | Migrations not applied | `python -m alembic upgrade head` |
-| `/health` shows `"redis": "down (...)"`, responses carry `X-Budget-Warning: budget-check-unavailable` | Redis unreachable; `BUDGET_FAIL_MODE=open` lets traffic through unchecked | `docker compose up -d redis`; restart the app so it reconciles |
-| All requests fail with `503 budget_unavailable` | Redis/Postgres unreachable and `BUDGET_FAIL_MODE=closed` | Bring the dependency back, or switch to `open` for local dev |
-| `503 database_unavailable` on `/v1/usage`, `/v1/budgets` or `/v1/quality` | Postgres unreachable | As above for Postgres |
-| Budgets look wrong after `docker compose restart redis` or `FLUSHALL` | Redis counters lost or stale | Restart the app, or `POST /v1/budgets/reconcile` (rebuilds from Postgres) |
-| Server won't start: `RoutingConfigError: ...` | Typo or invalid rule in `config/routing.yaml` | Fix the line named in the message; the config is validated at startup on purpose |
-| Server won't start: `QualityConfigError: No usable reference model ...` | `VERIFY_ENABLED=true` but no tier-3 model is usable (e.g. `production` profile without `ANTHROPIC_API_KEY`) | Set the API key, use `ROUTING_PROFILE=dev`, or `VERIFY_ENABLED=false` |
-| `503 no_route` | No available model in the allowed tiers | Set the API keys, use `ROUTING_PROFILE=dev`, or adjust the feature rule |
-| A request went to an unexpected model | Classifier keywords / feature rules / pre-call escalation | `POST /v1/route/preview` shows the tier, reasons, keyword hits and `pre_call_escalation` |
-| `/v1/quality` shows 0 verifications | No worker ran, or nothing was sampled yet | `python -m app.worker --once`; check `/v1/quality/queue` (`length`, `pending`) |
-| `/v1/quality/queue` shows `pending` > 0 that never drains | A worker crashed mid-job | Start a worker: jobs idle longer than `job_timeout_s` are reclaimed automatically |
-| `dead_letter` > 0 | Jobs failed `max_attempts` times or were malformed | `docker exec spend-redis redis-cli XRANGE quality:verify:dead - +` shows the reasons |
-| Verifications are all `skipped` | The `quality-verifier` budget is exhausted | Raise it (`PUT /v1/budgets/team/quality-verifier`) or lower the sample rates |
-| `No module named streamlit` | Dashboard dependencies not installed | `python -m pip install -r requirements.txt` (venv active) |
-| Dashboard: "Could not load ... Is the API running?" | API not running, or on another address | Start `uvicorn`; set `GATEWAY_URL` before `streamlit run` |
-| Dashboard charts are empty | No traffic in the selected window | `python scripts/seed_demo_data.py`, or widen the window |
-| New requests don't show up in the dashboard | Analytics responses are cached (default 30 s) | Wait, press **Refresh data**, or set `ANALYTICS_CACHE_TTL_S=0` |
-| `400 invalid_window` from `/v1/analytics/*` | `from` ≥ `to`, or window > `ANALYTICS_MAX_WINDOW_DAYS` | Fix the parameters |
-| `column "routed_tier" does not exist` | Migration 0003 not applied | `python -m alembic upgrade head` |
+| Gateway | One canonical request/response schema; adapters for OpenAI, Anthropic, Ollama and a mock; normalised, retryable-aware errors | 1 |
+| Cost tracking | Every request audited in PostgreSQL; exact money (`Decimal`, `NUMERIC(14,8)`, integer nano-dollars in Redis) | 2 |
+| Budgets | Daily/monthly limits per team and feature; atomic **reserve-then-settle** in Redis (Lua); 80% warnings, 100% blocks (`402`), audited overrides; reconciliation from Postgres | 2 |
+| Routing | 3-tier complexity routing (`rules-v2` classifier with confidence and reasons); per-feature rules; budget-aware downgrade; savings vs the strongest model | 3, 6 |
+| Quality | Deterministic sampling to a Redis Streams queue; worker with reference model + similarity/LLM judge; routing misses as labelled data; synchronous cascade on visible failures; verification on its own budget | 4 |
+| Dashboard | Analytics API (spend, projections, burn-down, gross vs net savings, Wilson intervals, latency percentiles); Streamlit dashboard | 5 |
+| Evidence | 1,000-prompt labelled workload, A/B/C simulation, reproducible reports, held-out classifier evaluation | 6 |
+| Ops | Docker image + compose profiles, `dev.ps1`, GitHub Actions (ruff, pytest on 3.11/3.13, smoke tests on Postgres + Redis) | 6 |
+
+## Results (Phase 6 simulation)
+
+| Mode | Cost / 1,000 requests | Savings vs all-strongest | Served ≥ required tier |
+|---|---|---|---|
+| A: all on the strongest model | $1.02 | – | 100% |
+| B: routing only | $0.36 | 65.5% | 97.7% |
+| C: routing + verification + escalation | $0.62 | 63.7% gross · 40.3% net | 98.0% |
+
+- Held-out classifier accuracy: **83.4% → 92.4%** (`rules-v1` → `rules-v2`); under-routing 23 → 6 of 301.
+- Escalation rescued all 23 genuinely broken cheap answers.
+- Verification sample rate 5% / 10% / 25% / 50% → net savings 55.1% / 40.3% / 28.0% / 12.3%.
+
+Full report: [`reports/final-v2/report.md`](reports/final-v2/report.md) · rebuild it with
+`python scripts/build_report.py final-v2`.
+
+## Running things
+
+```powershell
+python -m pytest                                   # 275 tests (fakeredis + SQLite, no Docker)
+python -m ruff check .                             # lint
+python scripts/smoke_test.py                       # smoke tests need the API running:
+python scripts/smoke_routing.py                    #   gateway + budgets, routing,
+python scripts/smoke_quality.py                    #   escalation + queue + worker,
+python scripts/smoke_dashboard.py                  #   analytics + headless dashboard
+python scripts/run_simulation.py --sweep 0.05,0.25,0.5        # A/B/C on 1,000 prompts
+python scripts/build_report.py <run_id>                        # report + charts
+python scripts/evaluate_classifier.py --split test --compare  # held-out rules-v1 vs rules-v2
+```
+
+Example request (PowerShell):
+
+```powershell
+$body = @{ team_id = "search"; feature = "summarize"
+           messages = @(@{ role = "user"; content = "Hello gateway" }) } | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/chat -Method Post -ContentType "application/json" -Body $body
+```
 
 ## Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `OPENAI_API_KEY` | — | Enables OpenAI models |
-| `ANTHROPIC_API_KEY` | — | Enables Anthropic models |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Local Ollama server |
-| `MODEL_REGISTRY_PATH` | `config/models.yaml` | Model catalogue |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | — | Enable real providers |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Local Ollama |
+| `MODEL_REGISTRY_PATH` | `config/models.yaml` | Models, tiers, prices |
 | `REQUEST_TIMEOUT_S` | `60` | Upstream call timeout |
-| `DATABASE_URL` | `postgresql+asyncpg://spend:spend_dev_password@127.0.0.1:5432/spend` | Audit log, policies, verifications (source of truth) |
-| `REDIS_URL` | `redis://127.0.0.1:6379/0` | Budget counters and the verification stream |
-| `REDIS_TIMEOUT_S` | `0.5` | Redis socket timeout for the API; keeps "Redis is down" decisions fast (the worker uses ≥ 5 s) |
-| `BUDGET_WARN_THRESHOLD` | `0.8` | Fraction of a limit that triggers warnings and alerts |
-| `BUDGET_FAIL_MODE` | `open` | `open`: allow + warn if Redis is down; `closed`: reject with 503 |
-| `RECONCILE_ON_STARTUP` | `true` | Rebuild Redis counters from Postgres at startup (request and verification spend) |
-| `ROUTING_CONFIG_PATH` | `config/routing.yaml` | Routing policy (tiers, feature rules, classifier keywords) |
-| `ROUTING_PROFILE` | `dev` | `dev`: mock model per tier (priced like real ones); `production`: real providers |
-| `QUALITY_CONFIG_PATH` | `config/quality.yaml` | Sampling, verification, escalation and privacy policy |
-| `VERIFY_ENABLED` | `true` | `false` disables sampling and async verification (escalation still works) |
-| `WORKER_CONCURRENCY` | `4` | Verification jobs processed in parallel per worker |
-| `WORKER_CONSUMER_NAME` | `<hostname>-<pid>` | Consumer name in the Redis consumer group; unique per worker process |
-| `ANALYTICS_CACHE_TTL_S` | `30` | Seconds an analytics response may be served from cache (`0` = off) |
-| `ANALYTICS_MAX_WINDOW_DAYS` | `366` | Longest allowed `from`→`to` window for analytics queries |
-| `GATEWAY_URL` | `http://127.0.0.1:8000` | Where the dashboard (and the smoke scripts) find the API |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `spend` / `spend_dev_password` / `spend` | Used by `docker compose` to initialise Postgres |
-| `POSTGRES_PORT` / `REDIS_PORT` | `5432` / `6379` | Host ports published by `docker compose` |
+| `DATABASE_URL` | `postgresql+asyncpg://spend:spend_dev_password@127.0.0.1:5432/spend` | Postgres (source of truth) |
+| `REDIS_URL` | `redis://127.0.0.1:6379/0` | Budget counters and verification stream |
+| `REDIS_TIMEOUT_S` | `0.5` | API's Redis timeout (fast fail-open/closed decisions) |
+| `BUDGET_WARN_THRESHOLD` | `0.8` | Warning threshold |
+| `BUDGET_FAIL_MODE` | `open` | `open`: allow + warn if Redis is down; `closed`: `503` |
+| `RECONCILE_ON_STARTUP` | `true` | Rebuild Redis counters from Postgres at startup |
+| `ROUTING_CONFIG_PATH` / `ROUTING_PROFILE` | `config/routing.yaml` / `dev` | Routing policy; `dev` = mock per tier, `production` = real providers |
+| `QUALITY_CONFIG_PATH` / `VERIFY_ENABLED` | `config/quality.yaml` / `true` | Sampling, verification, escalation, privacy |
+| `WORKER_CONCURRENCY` / `WORKER_CONSUMER_NAME` | `4` / `<host>-<pid>` | Verification worker |
+| `ANALYTICS_CACHE_TTL_S` / `ANALYTICS_MAX_WINDOW_DAYS` | `30` / `366` | Analytics API |
+| `GATEWAY_URL` | `http://127.0.0.1:8000` | Where the dashboard and scripts find the API |
+| `GATEWAY_PORT` / `DASHBOARD_PORT` / `POSTGRES_PORT` / `REDIS_PORT` | `8000` / `8501` / `5432` / `6379` | Host ports published by compose |
 
-Model names and prices in `config/models.yaml` are illustrative. Verify them against each
-provider's pricing page before relying on the cost numbers.
+Model names and prices in `config/models.yaml` are illustrative: verify them against each provider's
+pricing page before relying on cost numbers.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `docker: command not found` | Install Docker Desktop (Windows Home needs WSL 2), start it, open a **new** terminal |
+| `ModuleNotFoundError` / wrong Python | Activate the venv; `(Get-Command python).Source` should point into `.venv` |
+| `can't open file ...` / `No 'script_location'` | Run from the project folder (where `alembic.ini` is) |
+| `port is already allocated` | Change `POSTGRES_PORT` / `GATEWAY_PORT` / `DASHBOARD_PORT` in `.env` |
+| `password authentication failed` | The password only applies when the volume is created: `docker compose down -v` (deletes data) |
+| `relation ... does not exist` / `column ... does not exist` | `python -m alembic upgrade head` |
+| Every request `503 budget_unavailable` | Redis/Postgres down with `BUDGET_FAIL_MODE=closed` |
+| `QualityConfigError: No usable reference model` | `production` profile without `ANTHROPIC_API_KEY`: add it, use `dev`, or `VERIFY_ENABLED=false` |
+| Verifications all `skipped` | The `quality-verifier` budget is spent: raise it or lower sample rates |
+| Dashboard can't reach the API / empty charts | Start the API; set `GATEWAY_URL`; `python scripts/seed_demo_data.py` |
+| Simulation: `run id ... was already used` | Pick a new `--run-id` (team ids and daily budgets embed it) |
+
+More: [Phase 2](docs/phases/phase-2-budgets.md) · [Phase 4](docs/phases/phase-4-quality.md) · [Phase 5](docs/phases/phase-5-dashboard.md) notes.
 
 ## Project layout
 
 ```
-app/
-├── main.py            App factory, lifespan, error handlers, /health, /v1/chat
-├── bootstrap.py       Composition root shared by the API and the worker
-├── worker.py          python -m app.worker (verification worker CLI)
-├── gateway.py         Pipeline: route -> pre-call escalation -> reserve (downgrade) -> call
-│                      -> settle -> post-call checks / cascade -> sample for verification
-├── audit.py           Audit-log writer (background) + usage queries
-├── money.py           Decimal / nano-dollar helpers
-├── tokens.py          Pre-call token estimation
-├── registry.py        Model registry + exact Decimal cost calculation
-├── schemas.py         Canonical request/response + budget/usage models
-├── errors.py          Normalised error types (incl. 402 / 503 budget and routing errors)
-├── config.py          Environment settings
-├── api/               /v1/usage, /v1/budgets, /v1/routing, /v1/quality, /v1/analytics routers
-├── analytics/         pure query functions: spend, projections, savings, quality, latency, KPIs
-├── fingerprint.py     prompt fingerprints (SHA-256 of normalised instructions) and previews
-├── budgets/           periods, Lua scripts, Redis store, policies, service, reconciliation
-├── routing/           routing config loader, rule-based classifier, router
-├── quality/           quality config, sampling, judges, escalation, jobs, queue, worker, reports
-├── db/                SQLAlchemy engine/session + ORM models
-└── providers/         One adapter per provider (Adapter pattern); mock with capability limits
-dashboard/app.py       Streamlit dashboard (reads only from the analytics API)
-migrations/            Alembic environment + versioned schema migrations (0001-0003)
-config/                models.yaml, routing.yaml, quality.yaml
-scripts/               Smoke tests, budget and demo-data seeding, routing-miss export
-tests/                 pytest suite (fakeredis + SQLite)
-docs/                  Architecture, API reference, per-phase design, theory notes, change records
-docker-compose.yml     Postgres 16 + Redis 7
+app/            gateway, budgets, routing, quality (queue, worker, judges), analytics, API routers
+dashboard/      Streamlit dashboard (reads only from the analytics API)
+config/         models.yaml, routing.yaml, quality.yaml
+migrations/     Alembic migrations 0001-0003
+scripts/        smoke tests, seeding, simulation, report builder, classifier evaluation, dev.ps1
+data/           workload.jsonl (1,000 labelled prompts)
+reports/        simulation runs (report, summary, charts, compressed results)
+tests/          pytest suite
+docs/           architecture, API, case study, interview notes, per-phase design/theory/changes
 ```
 
 ## Known limitations
 
-- No authentication: anyone who can reach the API can change budgets, read usage, or read the prompts stored in routing misses.
-- Token estimation before the call is a ~4 chars/token heuristic; real input can exceed it.
-- Reconciliation resets in-flight holds, so it is only safe with a single gateway instance or during a quiet window.
-- The rule-based classifier is English-only and keyword-driven (no stemming beyond plurals, blind to negation).
-- Savings are a counterfactual estimate: the strongest model might have produced a different number of output tokens.
-- The similarity judge only suits the mocks; real answers need the LLM judge, which has its own biases.
-- Post-call checks only catch *visible* failures; a fluent but wrong answer is only found by sampling.
-- Routing and quality config are loaded at startup; changes need a restart.
-- Analytics run on the transactional database; at scale they belong on a replica or warehouse with rollups.
-- Month-end projections don't model weekly seasonality or growth explicitly.
-- Full lists: [Phase 2](docs/phases/phase-2-budgets.md#known-limitations) · [Phase 3](docs/phases/phase-3-routing.md#known-limitations) · [Phase 4](docs/phases/phase-4-quality.md#known-limitations) · [Phase 5](docs/phases/phase-5-dashboard.md#known-limitations)
+- **No authentication**: anyone who can reach the API can change budgets and read usage.
+- **Mock-model results**: costs follow real price ratios; answer quality is simulated.
+- The keyword classifier is English-only; the dataset is synthetic and self-labelled.
+- Analytics run on the transactional database; reconciliation assumes a single gateway instance.
+- Per-phase lists: [2](docs/phases/phase-2-budgets.md#known-limitations) · [3](docs/phases/phase-3-routing.md#known-limitations) · [4](docs/phases/phase-4-quality.md#known-limitations) · [5](docs/phases/phase-5-dashboard.md#known-limitations) · [6](docs/phases/phase-6-simulation.md#known-limitations)
 
 ## Documentation
 
-- [Architecture](docs/architecture.md)
-- [API Reference](docs/api.md)
-- [Changelog](CHANGELOG.md)
-- Phase notes: [Phase 1: Gateway](docs/phases/phase-1-gateway.md) · [Phase 2: Budgets](docs/phases/phase-2-budgets.md) · [Phase 3: Routing](docs/phases/phase-3-routing.md) · [Phase 4: Quality](docs/phases/phase-4-quality.md) · [Phase 5: Dashboard](docs/phases/phase-5-dashboard.md)
-- Theory notes: [Phase 2](docs/notes/phase-2-theory.md) · [Phase 3](docs/notes/phase-3-theory.md) · [Phase 4](docs/notes/phase-4-theory.md) · [Phase 5](docs/notes/phase-5-theory.md)
-- Change records: [Phase 2](docs/phases/phase-2-changes.md) · [Phase 3](docs/phases/phase-3-changes.md) · [Phase 4](docs/phases/phase-4-changes.md) · [Phase 5](docs/phases/phase-5-changes.md)
+- [Case study](docs/case-study.md) · [Interview notes](docs/interview-notes.md)
+- [Architecture](docs/architecture.md) · [API reference](docs/api.md) · [Changelog](CHANGELOG.md)
+- Design notes: [1](docs/phases/phase-1-gateway.md) · [2](docs/phases/phase-2-budgets.md) · [3](docs/phases/phase-3-routing.md) · [4](docs/phases/phase-4-quality.md) · [5](docs/phases/phase-5-dashboard.md) · [6](docs/phases/phase-6-simulation.md)
+- Theory notes: [2](docs/notes/phase-2-theory.md) · [3](docs/notes/phase-3-theory.md) · [4](docs/notes/phase-4-theory.md) · [5](docs/notes/phase-5-theory.md) · [6](docs/notes/phase-6-theory.md)
+- Change records: [2](docs/phases/phase-2-changes.md) · [3](docs/phases/phase-3-changes.md) · [4](docs/phases/phase-4-changes.md) · [5](docs/phases/phase-5-changes.md) · [6](docs/phases/phase-6-changes.md)
 
 ## Authors
 

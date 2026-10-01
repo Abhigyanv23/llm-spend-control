@@ -1,0 +1,49 @@
+{
+  "split": "train",
+  "rules-v1": {
+    "n": 699,
+    "accuracy": 0.7983,
+    "under_routed": 37,
+    "over_routed": 104,
+    "confusion": [
+      [
+        228,
+        13,
+        91
+      ],
+      [
+        0,
+        186,
+        0
+      ],
+      [
+        27,
+        10,
+        144
+      ]
+    ]
+  },
+  "rules-v2": {
+    "n": 699,
+    "accuracy": 0.9142,
+    "under_routed": 17,
+    "over_routed": 43,
+    "confusion": [
+      [
+        289,
+        13,
+        30
+      ],
+      [
+        0,
+        186,
+        0
+      ],
+      [
+        7,
+        10,
+        164
+      ]
+    ]
+  }
+}
