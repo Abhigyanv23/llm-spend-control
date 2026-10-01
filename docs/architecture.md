@@ -1,6 +1,6 @@
 # Architecture
 
-## Current state (after Phase 4)
+## Current state (after Phase 5)
 
 ```mermaid
 flowchart LR
@@ -33,11 +33,37 @@ flowchart LR
     RA[/v1/routing, /v1/route/preview/] --> RT
     QA[/v1/quality, /misses, /queue/] --> PG
     QA --> RD
+    DB[Streamlit dashboard<br/>dashboard/app.py] -->|HTTP only| AN2[/v1/analytics/*<br/>TTL cache/]
+    AN2 --> AL[Analytics layer<br/>app/analytics] -->|aggregate SQL| PG
 ```
 
 Solid arrows are on the request's critical path; dotted arrows happen after the response, in
 the worker process, or at startup. `routing.yaml` and `quality.yaml` are loaded and validated
 once at startup by `app/bootstrap.py`, the composition root shared by the API and the worker.
+
+## Analytics data flow (Phase 5)
+
+```mermaid
+flowchart LR
+    GW[Gateway] -->|INSERT: columns + metadata JSON<br/>routed_tier, route_source, escalated,<br/>baseline_cost_usd, prompt_fingerprint| RL[(request_logs)]
+    WK[Worker] -->|INSERT| VR[(verifications<br/>routing_misses)]
+    BS[BudgetService] -->|policies, alerts| BP[(budget_policies<br/>budget_alerts)]
+    RL --> A[app/analytics<br/>pure query functions]
+    VR --> A
+    BP --> A
+    A -->|Decimal, date| API[/v1/analytics/*<br/>validate window · TTL cache · JSON/]
+    API -->|money as strings, UTC ISO| UI[Streamlit dashboard<br/>Altair charts]
+```
+
+- **Columns for reads, JSON for the record.** Migration `0003` promoted the fields analytics
+  aggregates on from `metadata` to typed columns (backfilled), so queries are indexable and
+  portable; the JSON stays the complete record.
+- **Pure analytics functions** return Python types; the API serialises, validates and caches.
+- **The dashboard never touches the database**: one source of business logic, and the API is
+  the only surface to secure.
+- Indexes serving analytics: `(team_id, created_at) INCLUDE (cost_usd)` (covering, Postgres),
+  `(feature, created_at)`, `(model, created_at)`, `(prompt_fingerprint, created_at)`,
+  `(created_at)`; `verifications (feature|model, created_at)`.
 
 ## Request lifecycle
 
@@ -229,8 +255,9 @@ and feature (not only those with a policy). Streams are capped with approximate 
 
 | Process | Command | Scales by | Holds |
 |---|---|---|---|
-| API | `python -m uvicorn app.main:app` | more uvicorn workers/instances | no state (Postgres + Redis) |
+| API | `python -m uvicorn app.main:app` | more uvicorn workers/instances | no state (Postgres + Redis); a 30 s analytics cache per process |
 | Verification worker | `python -m app.worker` | more worker processes: the consumer group splits jobs | only in-flight jobs (pending in Redis) |
+| Dashboard | `python -m streamlit run dashboard/app.py` | more instances (stateless) | a 30 s response cache per session server |
 
 Both build their dependencies with `build_core()` in `app/bootstrap.py`; the worker never
 imports the web app.
@@ -262,5 +289,4 @@ imports the web app.
 
 | Phase | Adds |
 |---|---|
-| 5 | Dashboard over `request_logs`, `verifications`, `routing_misses` and `budget_alerts`: spend, savings, miss rate, escalation rate |
-| 6 | Simulated 1,000-request workload through the full pipeline (incl. verification); savings report net of quality overhead |
+| 6 | Simulated 1,000-request workload through the full pipeline (incl. verification); savings report net of quality overhead; containers and CI |

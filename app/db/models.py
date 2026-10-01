@@ -4,7 +4,8 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (JSON, Boolean, CheckConstraint, DateTime, Float, Index, Integer,
-                        MetaData, Numeric, String, Text, UniqueConstraint, Uuid, func, true)
+                        MetaData, Numeric, String, Text, UniqueConstraint, Uuid, false, func,
+                        true)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -54,13 +55,29 @@ class RequestLog(Base):
     # "metadata" is reserved on SQLAlchemy declarative classes, so the attribute is `meta`
     # while the column in the database is still called "metadata"
     meta: Mapped[dict] = mapped_column("metadata", JsonB, nullable=False, default=dict)
+    # Phase 5 analytics columns: promoted from metadata JSON (migration 0003 backfills them)
+    routed_tier: Mapped[int | None] = mapped_column(Integer)
+    route_source: Mapped[str | None] = mapped_column(String(16))
+    classifier_confidence: Mapped[float | None] = mapped_column(Float)
+    baseline_cost_usd: Mapped[Decimal | None] = mapped_column(Money)
+    escalated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    pre_escalated: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    downgraded: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    prompt_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    prompt_preview: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         CheckConstraint(f"status IN {REQUEST_STATUSES}", name="status_valid"),
-        # Composite indexes: equality column first, range column (created_at) second
-        Index("ix_request_logs_team_id_created_at", "team_id", "created_at"),
+        # Composite indexes: equality column first, range column (created_at) second.
+        # The team index is COVERING on Postgres (INCLUDE cost_usd): "spend by team over a
+        # window" is answered from the index alone, without visiting the table rows.
+        Index("ix_request_logs_team_id_created_at", "team_id", "created_at",
+              postgresql_include=["cost_usd"]),
         Index("ix_request_logs_feature_created_at", "feature", "created_at"),
         Index("ix_request_logs_created_at", "created_at"),
+        Index("ix_request_logs_model_created_at", "model", "created_at"),
+        Index("ix_request_logs_prompt_fingerprint_created_at", "prompt_fingerprint",
+              "created_at"),
     )
 
 

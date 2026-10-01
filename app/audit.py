@@ -33,6 +33,16 @@ class AuditRecord:
     error_code: str | None = None
     override_reason: str | None = None
     metadata: dict = field(default_factory=dict)    # must be JSON-serialisable (no Decimal)
+    # Phase 5: hot fields promoted out of metadata into real columns, for fast analytics
+    routed_tier: int | None = None              # tier of the model that served the request
+    route_source: str | None = None             # explicit | pinned | routed | default
+    classifier_confidence: float | None = None
+    baseline_cost_usd: Decimal | None = None    # same tokens on the strongest model
+    escalated: bool = False                     # post-call cascade replaced the answer
+    pre_escalated: bool = False                 # pre-call tier bump applied
+    downgraded: bool = False                    # served by a budget-downgrade fallback
+    prompt_fingerprint: str | None = None       # SHA-256 of the normalised instructions
+    prompt_preview: str | None = None           # only when privacy settings allow
 
 
 class AuditLogger:
@@ -52,7 +62,13 @@ class AuditLogger:
                     estimated_cost_usd=record.estimated_cost_usd, cost_usd=record.cost_usd,
                     latency_ms=record.latency_ms, status=record.status,
                     error_code=record.error_code, override_reason=record.override_reason,
-                    meta=record.metadata))
+                    meta=record.metadata, routed_tier=record.routed_tier,
+                    route_source=record.route_source,
+                    classifier_confidence=record.classifier_confidence,
+                    baseline_cost_usd=record.baseline_cost_usd, escalated=record.escalated,
+                    pre_escalated=record.pre_escalated, downgraded=record.downgraded,
+                    prompt_fingerprint=record.prompt_fingerprint,
+                    prompt_preview=record.prompt_preview))
                 await session.commit()
         except Exception:
             logger.exception("AUDIT WRITE FAILED request_id=%s team=%s cost=%s",
