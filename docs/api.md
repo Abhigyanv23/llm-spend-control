@@ -329,6 +329,159 @@ The active routing policy and the providers currently usable (API key set, or ke
 }
 ```
 
+## Analytics API (`/v1/analytics/*`)
+Read-only aggregates for the dashboard (Phase 5). Every response carries `generated_at` (UTC)
+and `cached` (served from the `ANALYTICS_CACHE_TTL_S` cache). Money is a fixed-point string;
+dates are UTC.
+
+**Common window parameters** (all endpoints except `/projections`):
+
+| Query param | Type | Notes |
+|---|---|---|
+| `from` | ISO 8601 | Inclusive. Default: 30 days before `to`. Naive values are UTC |
+| `to` | ISO 8601 | Exclusive. Default: now |
+| `team_id`, `feature` | string | Exact-match filters |
+
+`400 invalid_window` when `from` ≥ `to` or the window exceeds `ANALYTICS_MAX_WINDOW_DAYS` (366).
+
+The examples below are real responses from the seeded demo data, trimmed.
+
+### `GET /v1/analytics/summary`
+Headline KPIs. "Today" and "month to date" use the current UTC day/month regardless of the window.
+```json
+{
+  "generated_at": "2026-10-01T18:36:23.441567Z",
+  "window": { "from": "2026-09-01T18:36:23.350088Z", "to": "2026-10-01T18:36:23.350088Z",
+              "team_id": null, "feature": null },
+  "requests": 6150, "cost_usd": "22.55041920", "error_rate": 0.0065,
+  "spend_today_usd": "0.80027920", "spend_month_to_date_usd": "0.80027920",
+  "projected_month_end_usd": "24.80865520",
+  "gross_savings_pct": 53.02, "net_savings_pct": 43.9, "net_savings_usd": "19.50414710",
+  "verifier_pass_rate": 0.8404, "verifier_pass_rate_ci95": [0.8086, 0.8678],
+  "escalation_rate": 0.028,
+  "scopes_at_risk": [ { "scope": "team", "scope_id": "demo-marketing", "status": "at_risk",
+                        "projected_pct_of_limit": 125.0 } ],
+  "active_budget_alerts": [ { "scope": "team", "scope_id": "smoke4-12f106d9-tight",
+                              "period": "day", "period_key": "2026-10-01", "threshold": 1.0,
+                              "projected_usd": "0.00500950", "limit_usd": "0.00100000",
+                              "created_at": "2026-10-01T18:33:43.176403Z" } ],
+  "cached": false
+}
+```
+
+### `GET /v1/analytics/spend?group_by=team|feature|model`
+Daily cost per group, **zero-filled** (every series has a point for every UTC day in the
+window), sorted by total, plus cost by model and provider.
+```json
+{
+  "group_by": "team", "days": ["2026-09-30", "2026-10-01"], "total_cost_usd": "22.55041920",
+  "series": [ { "key": "demo-research", "total_cost_usd": "11.69092600", "requests": 733,
+                "points": [ { "date": "2026-09-30", "cost_usd": "0.40744300", "requests": 23 },
+                            { "date": "2026-10-01", "cost_usd": "0.35671200", "requests": 24 } ] } ],
+  "by_model": [ { "model": "mock-large", "provider": "mock", "requests": 911,
+                  "cost_usd": "13.60339800", "input_tokens": 1603023, "output_tokens": 577866,
+                  "avg_cost_usd": "0.01493238" } ]
+}
+```
+
+### `GET /v1/analytics/projections`
+Month-end projections for the **current** UTC month (no window). Params: `team_id`, `feature`
+(filtering one scope returns only that scope), `burndown` (default `true`).
+```json
+{
+  "month": "2026-10", "days_in_month": 31, "elapsed_days": 0.775277,
+  "items": [ {
+    "scope": "team", "scope_id": "demo-marketing", "monthly_limit_usd": "4.49600440",
+    "month_to_date_usd": "0.18129050", "daily_run_rate_usd": "0.18129050",
+    "projected_usd": { "run_rate": "5.62000550", "trailing_7d": "4.57708786", "ewma": "5.66074565" },
+    "projected_pct_of_limit": 125.0, "status": "at_risk",
+    "projected_exhaustion_at": "2026-10-25T13:48:23.935837Z",
+    "burndown": [ { "date": "2026-10-01", "cumulative_usd": "0.18129050", "ideal_usd": "0.14503240",
+                    "projected_usd": null, "limit_usd": "4.49600440" },
+                  { "date": "2026-10-02", "cumulative_usd": null, "ideal_usd": "0.29006480",
+                    "projected_usd": "0.36258100", "limit_usd": "4.49600440" } ]
+  } ]
+}
+```
+| Field | Meaning |
+|---|---|
+| `projected_usd.run_rate` | MTD / max(elapsed days, 1) × days in month |
+| `projected_usd.trailing_7d` | MTD + mean of the last 7 complete days × remaining days |
+| `projected_usd.ewma` | MTD + EWMA (α 0.3) of this month's daily spend × remaining days |
+| `projected_pct_of_limit` | Run-rate projection as % of `monthly_limit_usd` |
+| `status` | `exhausted` (MTD ≥ limit), `at_risk` (run-rate exhausts it before month end), `warning` (projected ≥ 80%), `ok`, `no_limit` |
+| `projected_exhaustion_at` | When the run-rate reaches the limit (only if before month end) |
+| `burndown` | Per day: actual cumulative spend (past), ideal straight line to the limit, run-rate projection (future) |
+Items are sorted most urgent first.
+
+### `GET /v1/analytics/top?kind=patterns|requests&limit=10`
+`patterns` groups by prompt fingerprint (`limit` 1–100); `requests` lists single requests.
+```json
+{ "kind": "patterns", "items": [ {
+    "prompt_fingerprint": "add658f9cc259fd5c73c51b288d280ee15e54d475ceee457fc10a2af54526a6f",
+    "requests": 201, "total_cost_usd": "3.65766900", "avg_cost_usd": "0.01819736",
+    "models": { "mock-large": 178, "mock-medium": 23 },
+    "prompt_preview": "Debug the failing test in module 9996" } ] }
+```
+`prompt_preview` is `null` unless `privacy.store_prompts` is on.
+
+### `GET /v1/analytics/savings`
+Routed, successful requests only. `net = gross − verification_overhead`.
+```json
+{
+  "routed_requests": 5530, "baseline_cost_usd": "44.42760600", "actual_cost_usd": "20.87383990",
+  "gross_savings_usd": "23.55376610", "gross_savings_pct": 53.02,
+  "verification_overhead_usd": "4.04961900", "net_savings_usd": "19.50414710",
+  "net_savings_pct": 43.9, "all_requests_cost_usd": "22.55041920",
+  "by_feature": [ { "feature": "summarize", "requests": 1789, "baseline_cost_usd": "15.01787700",
+                    "actual_cost_usd": "5.68647790", "gross_savings_usd": "9.33139910",
+                    "savings_pct": 62.14 } ],
+  "by_tier": [ { "tier": 1, "requests": 1838, "baseline_cost_usd": "8.18592300",
+                 "actual_cost_usd": "0.23793580", "gross_savings_usd": "7.94798720",
+                 "savings_pct": 97.09 } ]
+}
+```
+
+### `GET /v1/analytics/quality`
+```json
+{
+  "successful_requests": 6031,
+  "tier_distribution": { "1": 2000, "2": 3129, "3": 897, "unknown": 5 },
+  "route_sources": { "routed": 5530, "explicit": 296, "pinned": 200, "unknown": 5 },
+  "escalation": { "post_call": 169, "pre_call": 235, "post_call_rate": 0.028, "pre_call_rate": 0.039 },
+  "budget": { "downgrades": 81, "blocks": 70, "overrides": 54 },
+  "verification": { "pass": 495, "fail": 94, "inconclusive": 15, "skipped": 0, "verified": 604,
+                    "judged": 589, "pass_rate": 0.8404, "pass_rate_ci95": [0.8086, 0.8678] },
+  "verification_by_model": [ { "model": "mock-echo", "judged": 266, "pass": 206, "fail": 60,
+                               "pass_rate": 0.7744, "pass_rate_ci95": [0.7205, 0.8206] } ],
+  "misses_by_model": { "mock-echo": 60, "mock-medium": 34 },
+  "misses_by_feature": { "summarize": 30, "extraction": 14, "...": "..." }
+}
+```
+`pass_rate_ci95` is a 95% **Wilson score** interval (`null` when nothing was judged).
+
+### `GET /v1/analytics/latency`
+Successful requests only.
+```json
+{ "by_model": [
+    { "model": "mock-echo", "requests": 2005, "avg_ms": 846.52, "p50_ms": 698.52,
+      "p95_ms": 1531.11, "p99_ms": 5165.06 },
+    { "model": "mock-large", "requests": 897, "avg_ms": 3055.24, "p50_ms": 2566.3,
+      "p95_ms": 5437.67, "p99_ms": 14094.11 } ] }
+```
+
+### `GET /v1/analytics/errors`
+`errors` counts `provider_error` and `internal_error`; budget blocks and validation errors are
+listed under `by_error_code` / `by_status` but are not provider errors.
+```json
+{
+  "by_provider": [ { "provider": "mock", "requests": 6139, "errors": 37, "error_rate": 0.006 } ],
+  "by_error_code": [ { "error_code": "budget_exceeded", "status": "budget_blocked", "count": 67 },
+                     { "error_code": "provider_error", "status": "provider_error", "count": 40 } ],
+  "by_status": { "success": 6031, "budget_blocked": 70, "provider_error": 40, "validation_error": 9 }
+}
+```
+
 ## `GET /v1/usage`
 Reads the audit trail, newest first.
 

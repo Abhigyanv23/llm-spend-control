@@ -12,6 +12,10 @@ asyncpg>=0.30          # async Postgres driver (0.30+ ships Python 3.13 wheels)
 alembic>=1.13
 redis>=5.0             # includes redis.asyncio
 
+# --- Dashboard (Phase 5): python -m streamlit run dashboard/app.py ---
+streamlit>=1.40
+altair>=5.0            # charts (Vega-Lite); also a Streamlit dependency
+
 # --- Testing ---
 pytest>=8.0
 pytest-asyncio>=0.24

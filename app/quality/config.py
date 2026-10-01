@@ -72,6 +72,7 @@ class EscalationConfig:
 class PrivacyConfig:
     store_prompts: bool
     max_prompt_chars: int
+    prompt_preview_chars: int = 120     # analytics preview in request_logs (0 = none)
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,16 @@ def _positive_int(name: str, value) -> int:
         raise QualityConfigError(f"{name} must be an integer, got {value!r}") from None
     if number < 1:
         raise QualityConfigError(f"{name} must be >= 1, got {number}")
+    return number
+
+
+def _non_negative_int(name: str, value) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise QualityConfigError(f"{name} must be an integer, got {value!r}") from None
+    if number < 0:
+        raise QualityConfigError(f"{name} must be >= 0, got {number}")
     return number
 
 
@@ -250,7 +261,9 @@ def load_quality_config(path: str, registry: ModelRegistry, routing: RoutingConf
     privacy = PrivacyConfig(
         store_prompts=bool(raw.get("store_prompts", True)),
         max_prompt_chars=_positive_int("privacy.max_prompt_chars",
-                                       raw.get("max_prompt_chars", 2000)))
+                                       raw.get("max_prompt_chars", 2000)),
+        prompt_preview_chars=_non_negative_int("privacy.prompt_preview_chars",
+                                               raw.get("prompt_preview_chars", 120)))
 
     return QualityConfig(verify_enabled=verify_enabled, sampling=sampling,
                          verification=verification, escalation=escalation, privacy=privacy)
