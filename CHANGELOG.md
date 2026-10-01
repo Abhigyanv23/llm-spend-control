@@ -2,6 +2,50 @@
 
 All notable changes, grouped by build phase.
 
+## [0.4.0] - Phase 4: Quality Checks and Escalation
+
+### Added
+- `config/quality.yaml`: sampling, verification, escalation and privacy policy, validated at
+  startup against the model registry and routing profile (fail fast).
+- Deterministic hash-based sampling of successful routed responses on tiers 1–2 (10% base
+  rate, 50% when classifier confidence < 0.6); decision recorded in `metadata.quality.sampling`.
+- Verification queue on **Redis Streams**: consumer group, `XACK` after the result is stored,
+  `XAUTOCLAIM` of stale jobs, retries up to `max_attempts`, dead-letter stream, approximate
+  `MAXLEN`. Enqueueing runs in a background task and can never fail a request.
+- Worker process `python -m app.worker` (`--once`, `--concurrency`, `--consumer`) with bounded
+  concurrency, graceful Ctrl+C shutdown on Windows, and consumer cleanup.
+- Judges behind one interface: `SimilarityJudge` (difflib/Jaccard, deterministic) and
+  `LLMJudge` (strict-JSON grading against a reference answer; unparseable → `inconclusive`).
+- Verification budget: reference + judge calls are reserved/settled under
+  `quality-verifier` / `verification`; when blocked, the verification is stored as `skipped`.
+- Migration `0002`: `verifications` (UNIQUE `request_id` for idempotency) and
+  `routing_misses` (labelled examples; prompt stored only if `privacy.store_prompts`, capped).
+- Synchronous escalation: pre-call tier bump for uncertain high/critical requests; post-call
+  checks (empty, refusal, truncated, invalid JSON) with a one-step cascade to the next tier;
+  budget-blocked or failed escalations return the original answer with a note.
+- `metadata.escalation` on responses and audit rows (every attempt, its cost and check).
+- `GET /v1/quality` (miss rate ± 95% margin, weighted miss rate, misses by model/feature,
+  escalation counts, verification spend, net savings), `GET /v1/quality/misses`,
+  `GET /v1/quality/queue`.
+- `scripts/export_misses.py`: routing misses as JSONL training data.
+- `scripts/smoke_quality.py`: 19 live checks against Postgres + Redis.
+- Mock capability limits (`mock-echo` 200 chars, `mock-medium` 1,000, `mock-large` 4,000) and
+  tier-1 test directives `[[mock:empty|refuse|truncate|badjson]]`.
+- `app/bootstrap.py`: one composition root for the API and the worker.
+- Settings `QUALITY_CONFIG_PATH`, `VERIFY_ENABLED`, `WORKER_CONCURRENCY`, `WORKER_CONSUMER_NAME`.
+- Seeded `quality-verifier` team budget ($1.00/day, $20.00/month).
+- 117 new tests (210 total).
+
+### Changed
+- Routed `high`/`critical` requests with low classifier confidence start one tier higher.
+- `cost_usd`, `usage` and the audit row of an escalated request are the **sum of all attempts**;
+  `model` is the model that produced the returned answer.
+- `/v1/route/preview` applies pre-call escalation and returns `pre_call_escalation`.
+- Startup reconciliation also restores verification spend into the verifier's counters.
+- Starting with `VERIFY_ENABLED=true` and no usable tier-3 model now fails at startup with
+  `QualityConfigError` (e.g. `production` profile without `ANTHROPIC_API_KEY`).
+- `.gitignore` ignores `*.jsonl` (exports contain prompts).
+
 ## [0.3.0] - Phase 3: Request Complexity Routing
 
 ### Added

@@ -133,11 +133,14 @@ class Reservation:
 
 class BudgetService:
     def __init__(self, store: RedisBudgetStore, session_factory: async_sessionmaker,
-                 warn_threshold: Decimal = Decimal("0.8"), fail_mode: str = "open"):
+                 warn_threshold: Decimal = Decimal("0.8"), fail_mode: str = "open",
+                 verifier_scope: tuple[str, str] | None = None):
         self.store = store
         self.session_factory = session_factory
         self.warn_threshold = warn_threshold
         self.fail_mode = fail_mode
+        # (team_id, feature) that verification spend is charged to; reconciliation needs it
+        self.verifier_scope = verifier_scope
 
     # ------------------------------------------------------------ reserve
 
@@ -284,4 +287,5 @@ class BudgetService:
         return result
 
     async def reconcile(self, now: datetime) -> dict:
-        return await reconcile_counters(self.session_factory, self.store, now)
+        return await reconcile_counters(self.session_factory, self.store, now,
+                                        self.verifier_scope)

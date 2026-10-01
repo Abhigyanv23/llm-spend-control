@@ -11,7 +11,10 @@ from app.budgets import BudgetService, Reservation
 from app.errors import (BudgetExceededError, ContextTooLongError, GatewayError,
                         OverrideRequiredError)
 from app.money import usd_str
-from app.providers.base import ProviderAdapter
+from app.providers.base import ProviderAdapter, ProviderResult
+from app.quality import QualityConfig, decide_sampling
+from app.quality.escalation import apply_pre_call_escalation, check_answer
+from app.quality.jobs import VerificationJob
 from app.registry import ModelRegistry, ModelSpec
 from app.routing import RouteDecision, Router
 from app.schemas import ChatRequest, ChatResponse, Usage
@@ -30,6 +33,7 @@ class GatewayResult:
     response: ChatResponse
     audit: AuditRecord
     headers: dict[str, str] = field(default_factory=dict)
+    verification_job: VerificationJob | None = None     # set when sampled for verification
 
 
 class Gateway:
@@ -40,12 +44,14 @@ class Gateway:
     """
 
     def __init__(self, registry: ModelRegistry, adapters: dict[str, ProviderAdapter],
-                 budgets: BudgetService, router: Router | None = None):
+                 budgets: BudgetService, router: Router | None = None,
+                 quality: QualityConfig | None = None):
         # Dependencies are injected, not constructed here: tests pass fakes, prod passes real ones
         self.registry = registry
         self.adapters = adapters
         self.budgets = budgets
         self.router = router
+        self.quality = quality
 
     def route(self, request: ChatRequest) -> RouteDecision:
         if self.router is not None:
@@ -119,10 +125,17 @@ class Gateway:
         decision: RouteDecision | None = None
         spec: ModelSpec | None = None
         downgrades: list[dict] = []
+        escalation: dict | None = None
 
         try:
             # 1. Route: explicit model, pinned feature, or classifier tier within bounds
             decision = self.route(request)
+            # 1b. Pre-call escalation (Phase 4): an important request the classifier is unsure
+            #     about starts one tier higher. Still one call, so no double spend.
+            if self.quality is not None:
+                decision, pre_call = apply_pre_call_escalation(
+                    self.router, self.quality.escalation, request, decision)
+                escalation = {"pre_call": pre_call, "attempts": [], "escalated": False}
             record.model = decision.model
 
             # 2. Reserve BEFORE spending (downgrading if a budget blocks). Raises 402/503.
@@ -142,36 +155,67 @@ class Gateway:
             await self.budgets.settle(reservation, cost)
             settled = True
 
-            # 5. Routing metadata + savings versus the strongest model
-            routing_meta = _routing_metadata(decision, spec, downgrades)
-            if baseline := self.baseline_cost(result.input_tokens, result.output_tokens):
+            # 5. Post-call checks; on a visible failure, cascade one tier up (Phase 4).
+            #    Each attempt is reserved and settled separately: its cost is real.
+            esc = _Escalation(spec=spec, result=result)
+            if escalation is not None:
+                esc.final_check_failed = self._check(request, decision, result)
+                escalation["attempts"].append(_attempt_meta(
+                    spec, result, cost, record.latency_ms, record.estimated_cost_usd,
+                    esc.final_check_failed))
+                if esc.final_check_failed:
+                    await self._post_call_escalation(request, request_id, now, decision,
+                                                     override_reason, esc)
+                escalation["attempts"].extend(esc.attempts)
+                escalation.update(escalated=esc.escalations > 0, escalations=esc.escalations,
+                                  final_check_failed=esc.final_check_failed,
+                                  blocked=esc.blocked, note=esc.note,
+                                  extra_cost_usd=usd_str(esc.cost))
+            final_spec, final = esc.spec, esc.result
+            total_cost = cost + esc.cost
+            total_in = result.input_tokens + esc.input_tokens
+            total_out = result.output_tokens + esc.output_tokens
+
+            # 6. Routing metadata + savings versus the strongest model (net of escalation)
+            routing_meta = _routing_metadata(decision, final_spec, downgrades)
+            if baseline := self.baseline_cost(final.input_tokens, final.output_tokens):
                 baseline_model, baseline_usd = baseline
                 routing_meta.update(baseline_model=baseline_model,
                                     baseline_cost_usd=usd_str(baseline_usd),
-                                    savings_usd=usd_str(baseline_usd - cost))
+                                    savings_usd=usd_str(baseline_usd - total_cost))
 
-            record.input_tokens, record.output_tokens = result.input_tokens, result.output_tokens
-            record.cost_usd = cost
+            # 7. Should a stronger model double-check this answer later? Not if the cascade
+            #    already replaced it.
+            quality_meta, job = self._sample(request, request_id, now, decision, final_spec,
+                                             final, escalated=esc.escalations > 0)
+            escalation_meta = {"escalation": escalation} if escalation is not None else {}
+
+            # One audit row per request: the returned answer's model, ALL attempts' cost
+            record.model, record.provider = final_spec.name, final_spec.provider
+            record.input_tokens, record.output_tokens = total_in, total_out
+            record.cost_usd = total_cost
+            record.estimated_cost_usd = record.estimated_cost_usd + esc.estimate
+            record.latency_ms = round(record.latency_ms + esc.latency_ms, 2)
             record.override_reason = reservation.override_reason
             budget_meta = reservation.metadata()
-            record.metadata = {"raw_model": result.raw_model, **result.metadata, **budget_meta,
-                               "routing": routing_meta}
+            record.metadata = {"raw_model": final.raw_model, **final.metadata, **budget_meta,
+                               "routing": routing_meta, **quality_meta, **escalation_meta}
 
             response = ChatResponse(
-                request_id=request_id, model=spec.name, provider=spec.provider,
-                output=result.output,
-                usage=Usage(input_tokens=result.input_tokens,
-                            output_tokens=result.output_tokens),
-                cost_usd=cost, latency_ms=record.latency_ms,
-                metadata={**result.metadata, "raw_model": result.raw_model,
+                request_id=request_id, model=final_spec.name, provider=final_spec.provider,
+                output=final.output,
+                usage=Usage(input_tokens=total_in, output_tokens=total_out),
+                cost_usd=total_cost, latency_ms=record.latency_ms,
+                metadata={**final.metadata, "raw_model": final.raw_model,
                           "team_id": request.team_id, "feature": request.feature,
                           "priority": request.priority.value, **budget_meta,
-                          "routing": routing_meta},
+                          "routing": routing_meta, **quality_meta, **escalation_meta},
             )
             headers = {}
             if warning := reservation.warning_header():
                 headers["X-Budget-Warning"] = warning
-            return GatewayResult(response=response, audit=record, headers=headers)
+            return GatewayResult(response=response, audit=record, headers=headers,
+                                 verification_job=job)
 
         except GatewayError as exc:
             record.status, record.error_code = exc.audit_status, exc.code
@@ -195,6 +239,137 @@ class Gateway:
             # finish even if this task is being cancelled.
             if reservation is not None and not settled:
                 await asyncio.shield(self.budgets.release(reservation))
+
+    def _check(self, request: ChatRequest, decision: RouteDecision,
+               result: ProviderResult) -> str | None:
+        return check_answer(self.quality.escalation, request, result.output,
+                            result.metadata.get("finish_reason"), decision.classification)
+
+    async def _post_call_escalation(self, request: ChatRequest, request_id: str, now: datetime,
+                                    decision: RouteDecision, override_reason: str | None,
+                                    esc: "_Escalation") -> None:
+        """Retry on the next tier up while the answer fails a check and escalations remain.
+        Never fails the request: if escalating is impossible, blocked by budget or errors,
+        the user gets the answer we already have, with a note saying why."""
+        cfg = self.quality.escalation
+        input_estimate = estimate_input_tokens(request.messages)
+        while esc.final_check_failed:
+            if not cfg.enabled:
+                esc.note = "escalation disabled"
+                return
+            if esc.escalations >= cfg.max_escalations:
+                esc.note = f"max_escalations ({cfg.max_escalations}) reached"
+                return
+            if decision.source != "routed" or self.router is None:
+                esc.note = (f"not escalated: the model was chosen by '{decision.source}', "
+                            f"not the router")
+                return
+            if esc.spec.tier >= decision.max_tier:
+                esc.note = ("not escalated: already at the highest allowed tier "
+                            f"({decision.max_tier})")
+                return
+            nxt = self.router.pick_from_tier(request, esc.spec.tier + 1, decision.max_tier)
+            if nxt is None:
+                esc.note = "not escalated: no usable model in a higher tier"
+                return
+
+            estimate = nxt.worst_case_cost(input_estimate, request.max_tokens)
+            try:
+                reservation = await self.budgets.reserve(
+                    request_id=request_id, team_id=request.team_id, feature=request.feature,
+                    priority=request.priority, estimate_usd=estimate,
+                    override_reason=override_reason, now=now)
+            except BUDGET_BLOCK_ERRORS as exc:
+                esc.blocked = {"model": nxt.name, "tier": nxt.tier, "blocked_by": exc.code,
+                               "estimated_cost_usd": usd_str(estimate)}
+                esc.note = "escalation blocked by budget: returning the original answer"
+                return
+
+            previous = esc.spec.name
+            settled = False
+            start = time.perf_counter()
+            try:
+                new = await self.adapters[nxt.provider].complete(request, nxt.name)
+                new_cost = nxt.cost(new.input_tokens, new.output_tokens)
+                await self.budgets.settle(reservation, new_cost)
+                settled = True
+            except GatewayError as exc:
+                esc.attempts.append({"model": nxt.name, "tier": nxt.tier, "error": exc.code,
+                                     "cost_usd": usd_str(0),
+                                     "estimated_cost_usd": usd_str(estimate)})
+                esc.note = (f"escalation to {nxt.name} failed ({exc.code}): "
+                            f"returning the original answer")
+                return
+            finally:
+                latency = round((time.perf_counter() - start) * 1000, 2)
+                esc.latency_ms += latency
+                if not settled:
+                    await asyncio.shield(self.budgets.release(reservation))
+
+            trigger = esc.final_check_failed
+            esc.escalations += 1
+            esc.final_check_failed = self._check(request, decision, new)
+            esc.attempts.append({**_attempt_meta(nxt, new, new_cost, latency, estimate,
+                                                 esc.final_check_failed),
+                                 "escalated_because": trigger})
+            esc.cost += new_cost
+            esc.estimate += estimate
+            esc.input_tokens += new.input_tokens
+            esc.output_tokens += new.output_tokens
+            esc.spec, esc.result = nxt, new
+            logger.info("request_id=%s: escalated %s -> %s (%s)", request_id, previous,
+                        nxt.name, trigger)
+
+    def _sample(self, request: ChatRequest, request_id: str, now: datetime,
+                decision: RouteDecision, spec: ModelSpec, result: ProviderResult,
+                escalated: bool = False) -> tuple[dict, VerificationJob | None]:
+        """Deterministic sampling decision + the self-contained job for the worker."""
+        if self.quality is None:
+            return {}, None
+        classification = decision.classification
+        sample = decide_sampling(
+            self.quality.sampling, request_id=request_id, source=decision.source,
+            final_tier=spec.tier,
+            confidence=classification.confidence if classification else None,
+            escalated=escalated, verify_enabled=self.quality.verify_enabled)
+        meta = {"quality": {"sampling": sample.to_dict()}}
+        if not sample.sampled:
+            return meta, None
+        job = VerificationJob(
+            request_id=request_id, created_at=now.isoformat().replace("+00:00", "Z"),
+            team_id=request.team_id, feature=request.feature, priority=request.priority.value,
+            messages=[m.model_dump() for m in request.messages], output=result.output,
+            model=spec.name, tier=spec.tier, routing_source=decision.source,
+            classifier_confidence=classification.confidence if classification else None,
+            classifier_features=classification.features.to_dict() if classification else {},
+            classifier_reasons=list(classification.reasons) if classification else [],
+            sample_rate=sample.rate)
+        return meta, job
+
+
+@dataclass
+class _Escalation:
+    """Running state of the post-call cascade: the answer we would return right now."""
+    spec: ModelSpec
+    result: ProviderResult
+    attempts: list[dict] = field(default_factory=list)    # escalation attempts only
+    escalations: int = 0
+    final_check_failed: str | None = None
+    blocked: dict | None = None
+    note: str | None = None
+    cost: Decimal = Decimal(0)
+    estimate: Decimal = Decimal(0)
+    input_tokens: int = 0
+    output_tokens: int = 0
+    latency_ms: float = 0.0
+
+
+def _attempt_meta(spec: ModelSpec, result: ProviderResult, cost: Decimal, latency_ms: float,
+                  estimate: Decimal, check_failed: str | None) -> dict:
+    return {"model": spec.name, "tier": spec.tier, "cost_usd": usd_str(cost),
+            "estimated_cost_usd": usd_str(estimate), "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens, "latency_ms": latency_ms,
+            "finish_reason": result.metadata.get("finish_reason"), "check_failed": check_failed}
 
 
 def _routing_metadata(decision: RouteDecision | None, spec: ModelSpec | None,
