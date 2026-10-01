@@ -185,6 +185,10 @@ def mode_quality_config(base: dict, mode: str, sample_rate: float, verifier_team
         cfg["sampling"]["base_rate"] = sample_rate
         cfg["sampling"]["low_confidence_rate"] = max(sample_rate, min(1.0, sample_rate * 5))
     cfg["verification"]["budget"]["team_id"] = verifier_team
+    # A private stream per run and mode: any other worker running on this machine (e.g. the
+    # compose `worker` service) must not pick up these jobs with ITS config and budget
+    cfg["verification"]["stream"] = f"quality:verify:{verifier_team}"
+    cfg["verification"]["dead_letter_stream"] = f"quality:verify:{verifier_team}:dead"
     return cfg
 
 
