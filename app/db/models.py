@@ -15,6 +15,7 @@ JsonB = JSON().with_variant(JSONB(), "postgresql")
 
 REQUEST_STATUSES = ("success", "provider_error", "budget_blocked",
                     "validation_error", "internal_error")
+VERIFICATION_VERDICTS = ("pass", "fail", "inconclusive", "skipped")
 
 # Deterministic constraint names, so Alembic migrations can refer to them reliably
 NAMING_CONVENTION = {
@@ -105,4 +106,66 @@ class BudgetAlert(Base):
 
     __table_args__ = (
         UniqueConstraint("scope", "scope_id", "period", "period_key", "threshold"),
+    )
+
+
+class Verification(Base):
+    """Result of verifying one sampled response against a stronger reference model (Phase 4).
+    request_id is UNIQUE: the queue delivers at-least-once, so a re-delivered job must not
+    insert a second row (idempotency key)."""
+    __tablename__ = "verifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False)
+    team_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    feature: Mapped[str] = mapped_column(String(64), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)          # the cheap model
+    tier: Mapped[int] = mapped_column(Integer, nullable=False)
+    routing_source: Mapped[str] = mapped_column(String(16), nullable=False)
+    classifier_confidence: Mapped[float | None] = mapped_column(Float)
+    reference_model: Mapped[str | None] = mapped_column(String(128))
+    judge: Mapped[str | None] = mapped_column(String(64))
+    verdict: Mapped[str] = mapped_column(String(16), nullable=False)
+    score: Mapped[float | None] = mapped_column(Float)
+    reason: Mapped[str | None] = mapped_column(Text)
+    verification_cost_usd: Mapped[Decimal] = mapped_column(Money, nullable=False,
+                                                           server_default="0")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    meta: Mapped[dict] = mapped_column("metadata", JsonB, nullable=False, default=dict)
+
+    __table_args__ = (
+        UniqueConstraint("request_id"),
+        CheckConstraint(f"verdict IN {VERIFICATION_VERDICTS}", name="verdict_valid"),
+        Index("ix_verifications_feature_created_at", "feature", "created_at"),
+        Index("ix_verifications_model_created_at", "model", "created_at"),
+        Index("ix_verifications_created_at", "created_at"),
+    )
+
+
+class RoutingMiss(Base):
+    """A cheap answer that failed verification: a labelled example of 'this request needed a
+    stronger tier'. Training data for a future learned classifier."""
+    __tablename__ = "routing_misses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False)
+    team_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    feature: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt: Mapped[str | None] = mapped_column(Text)        # NULL when privacy.store_prompts=false
+    chosen_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    chosen_tier: Mapped[int] = mapped_column(Integer, nullable=False)
+    better_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    better_tier: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    classifier_confidence: Mapped[float | None] = mapped_column(Float)
+    classifier_features: Mapped[dict | None] = mapped_column(JsonB)
+
+    __table_args__ = (
+        UniqueConstraint("request_id"),
+        Index("ix_routing_misses_feature_created_at", "feature", "created_at"),
+        Index("ix_routing_misses_created_at", "created_at"),
     )
