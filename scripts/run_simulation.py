@@ -217,6 +217,12 @@ async def run_mode(args, run_id: str, run_dir: Path, records: list[dict], mode: 
             policies = (await client.get("/v1/budgets")).json()["policies"]
             interfering = [f"{p['scope']}:{p['scope_id']}" for p in policies
                            if p["enabled"] and p["scope"] == "feature" and p["scope_id"] in features]
+            # Team ids embed the run id, and budgets are per day: re-using a run id would start
+            # this run with the previous run's spend already on its counters
+            reused = [p["scope_id"] for p in policies if p["scope_id"] == team("marketing")]
+            if reused:
+                raise RuntimeError(f"run id '{run_id}' was already used (budget policy "
+                                   f"{reused[0]} exists): pick a new --run-id")
             if interfering:
                 print(f"  WARNING: budget policies on workload features affect this run: "
                       f"{interfering}", flush=True)
