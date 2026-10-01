@@ -3,7 +3,6 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
-import httpx
 from fastapi import BackgroundTasks, FastAPI, Header, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
@@ -15,28 +14,18 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from starlette.background import BackgroundTask
 
 from app.api import budgets as budgets_api
+from app.api import quality as quality_api
 from app.api import routing as routing_api
 from app.api import usage as usage_api
 from app.audit import AuditLogger, AuditRecord
-from app.budgets import BudgetService, RedisBudgetStore
+from app.bootstrap import build_core
 from app.config import Settings, settings as default_settings
-from app.db import create_engine, create_session_factory
 from app.errors import GatewayError
 from app.gateway import Gateway
-from app.providers import build_adapters
-from app.registry import ModelRegistry
-from app.routing import Router, available_providers, load_routing_config
 from app.schemas import ChatRequest, ChatResponse
 
 logger = logging.getLogger("app")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
-
-
-def create_redis(url: str, timeout_s: float) -> Redis:
-    # Short timeouts: when Redis is down we want a fast fail-open/closed decision,
-    # not every request hanging for seconds
-    return Redis.from_url(url, decode_responses=True, socket_timeout=timeout_s,
-                          socket_connect_timeout=timeout_s)
 
 
 def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None = None,
@@ -46,42 +35,30 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # Startup: build every long-lived dependency once and wire them together
-        registry = ModelRegistry(settings.model_registry_path)
-        # Validate routing config BEFORE opening connections: a typo fails startup immediately
-        routing_config = load_routing_config(settings.routing_config_path,
-                                             settings.routing_profile, registry)
-        providers = available_providers(settings)
-        router = Router(registry, routing_config, providers)
-        logger.info("Routing profile '%s' loaded; available providers: %s",
-                    routing_config.profile, ", ".join(sorted(providers)))
-
-        client = httpx.AsyncClient(timeout=settings.request_timeout_s)
-        db_engine = engine or create_engine(settings.database_url)
-        redis = redis_client or create_redis(settings.redis_url, settings.redis_timeout_s)
-        session_factory = create_session_factory(db_engine)
-
-        store = RedisBudgetStore(redis)
-        budgets = BudgetService(store, session_factory,
-                                warn_threshold=settings.budget_warn_threshold,
-                                fail_mode=settings.budget_fail_mode)
+        # Startup: the same composition root as the worker (app/bootstrap.py), so both
+        # processes are wired identically. Config is validated first (fail fast).
+        core = build_core(settings, engine=engine, redis_client=redis_client)
+        app.state.core = core
         app.state.settings = settings
-        app.state.registry = registry
-        app.state.router = router
-        app.state.engine = db_engine
-        app.state.redis = redis
-        app.state.session_factory = session_factory
-        app.state.budgets = budgets
-        app.state.audit = AuditLogger(session_factory)
-        app.state.gateway = Gateway(registry, build_adapters(client, settings), budgets, router)
+        app.state.registry = core.registry
+        app.state.router = core.router
+        app.state.quality_config = core.quality_config
+        app.state.engine = core.engine
+        app.state.redis = core.redis
+        app.state.session_factory = core.session_factory
+        app.state.budgets = core.budgets
+        app.state.queue = core.queue
+        app.state.audit = AuditLogger(core.session_factory)
+        app.state.gateway = Gateway(core.registry, core.adapters, core.budgets, core.router,
+                                    quality=core.quality_config)
 
         try:
-            await store.load_scripts()
+            await core.store.load_scripts()
         except Exception as exc:
             logger.error("Could not preload Redis Lua scripts (%s: %s)", type(exc).__name__, exc)
         if settings.reconcile_on_startup:
             try:
-                summary = await budgets.reconcile(datetime.now(UTC))
+                summary = await core.budgets.reconcile(datetime.now(UTC))
                 logger.info("Budget counters reconciled from Postgres: %s", summary)
             except Exception as exc:
                 # Don't refuse to start: fail mode decides per request what happens
@@ -89,16 +66,13 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
                              type(exc).__name__, exc)
         yield
         # Shutdown: close only what we created
-        await client.aclose()
-        if redis_client is None:
-            await redis.aclose()
-        if engine is None:
-            await db_engine.dispose()
+        await core.aclose()
 
-    app = FastAPI(title="LLM Spend Control Center", version="0.3.0", lifespan=lifespan)
+    app = FastAPI(title="LLM Spend Control Center", version="0.4.0", lifespan=lifespan)
     app.include_router(usage_api.router)
     app.include_router(budgets_api.router)
     app.include_router(routing_api.router)
+    app.include_router(quality_api.router)
 
     @app.exception_handler(GatewayError)
     async def gateway_error_handler(request: Request, exc: GatewayError):
@@ -159,6 +133,10 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
         result = await request.app.state.gateway.handle(body, override_reason=x_budget_override)
         # Off the critical path: the client gets its answer before the INSERT runs
         background_tasks.add_task(request.app.state.audit.write, result.audit)
+        if result.verification_job is not None:
+            # Also off the critical path, and best-effort: enqueue_safe never raises
+            background_tasks.add_task(request.app.state.queue.enqueue_safe,
+                                      result.verification_job)
         for name, value in result.headers.items():
             response.headers[name] = _header_safe(value)
         return result.response

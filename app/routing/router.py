@@ -123,6 +123,23 @@ class Router:
                              max_tier=max_tier, fallbacks=tuple(fallbacks),
                              reasons=tuple(reasons), classification=classification)
 
+    def downgrade_enabled(self, feature: str) -> bool:
+        rule = self.config.rule_for(feature)
+        return (self.config.budget_downgrade if rule.budget_downgrade is None
+                else rule.budget_downgrade)
+
+    def pick_from_tier(self, request: ChatRequest, start_tier: int,
+                       max_tier: int) -> ModelSpec | None:
+        """First usable model at start_tier or above (never above max_tier). The escalation
+        mechanism: WHEN to escalate is quality policy (app/quality/escalation.py)."""
+        rule = self.config.rule_for(request.feature)
+        needed = estimate_input_tokens(request.messages) + request.max_tokens
+        for t in range(max(start_tier, 1), min(max_tier, 3) + 1):
+            spec = self._pick(t, needed, rule)
+            if spec is not None:
+                return spec
+        return None
+
     def _usable(self, spec: ModelSpec, rule: FeatureRule) -> bool:
         return (spec.provider in self.available_providers
                 and set(rule.requires) <= set(spec.supports))

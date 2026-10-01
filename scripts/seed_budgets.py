@@ -24,6 +24,8 @@ POLICIES = [
     ("team", "demo-tiny", Decimal("0.0005"), None),         # hits its limit in a few calls
     ("feature", "summarize", Decimal("2.00"), None),
     ("feature", "chat-assistant", None, Decimal("50.00")),
+    # Phase 4: verification spend (reference + judge calls) is capped like any other team
+    ("team", "quality-verifier", Decimal("1.00"), Decimal("20.00")),
 ]
 
 

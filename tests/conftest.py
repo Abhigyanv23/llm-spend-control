@@ -13,6 +13,7 @@ from decimal import Decimal
 import fakeredis
 import httpx
 import pytest
+import yaml
 
 from app.budgets import BudgetService, RedisBudgetStore
 from app.budgets.policies import upsert_policy
@@ -77,3 +78,21 @@ async def api(engine, redis_client):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             yield client
+
+
+@pytest.fixture
+async def sampled_api(engine, redis_client, tmp_path):
+    """The app with sampling forced to 100%: every eligible response is queued for
+    verification. Yields (client, app) so tests can reach app.state (queue, core)."""
+    with open("config/quality.yaml", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    data["sampling"].update(base_rate=1.0, low_confidence_rate=1.0)
+    path = tmp_path / "quality.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    settings = Settings(_env_file=None, openai_api_key=None, anthropic_api_key=None,
+                        quality_config_path=str(path))
+    app = create_app(settings, engine=engine, redis_client=redis_client)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client, app

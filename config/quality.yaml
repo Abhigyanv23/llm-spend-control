@@ -1,0 +1,52 @@
+# Phase 4: quality checks and escalation.
+# Validated at startup against models.yaml and the active routing profile (fail fast).
+
+# Which successful responses get re-checked asynchronously by a stronger model
+sampling:
+  enabled: true
+  base_rate: 0.10                 # 10% of eligible (cheap-routed) responses
+  low_confidence_rate: 0.50       # ...but 50% when the classifier was unsure
+  low_confidence_threshold: 0.6   # rules-v1 confidences: 0.5 none, 0.65 mixed, 0.85 clear, 0.9 risk
+  skip_sources: [explicit, pinned, default]   # the caller/feature chose the model: nothing to judge
+  skip_top_tier: true             # a tier-3 answer has no stronger reference to compare against
+
+verification:
+  reference_model: auto           # auto = first usable tier-3 candidate of the routing profile
+  reference_max_tokens: 1024
+  judge:
+    type: similarity              # similarity (dev/tests, free, deterministic) | llm (production)
+    model: auto                   # llm judge only; auto = the reference model
+    similarity_method: sequence   # sequence (word-order aware) | jaccard (bag of words)
+    similarity_threshold: 0.8
+    max_tokens: 300
+  budget:                         # reference + judge calls are real spend: capped like any team
+    team_id: quality-verifier
+    feature: verification
+  max_attempts: 3                 # then the job goes to the dead-letter stream
+  job_timeout_s: 60               # a job pending longer than this is reclaimed by another worker
+  stream: "quality:verify"
+  dead_letter_stream: "quality:verify:dead"
+  consumer_group: verifiers
+  maxlen: 10000                   # approximate cap on stream length (XADD MAXLEN ~)
+
+# Synchronous escalation inside the gateway (a cascade), used in Part 4C
+escalation:
+  enabled: true
+  pre_call:
+    priorities: [high, critical]  # bump one tier BEFORE the call when...
+    confidence_below: 0.6         # ...the classifier is unsure about an important request
+  post_call:
+    checks: [empty, refusal, truncated, invalid_json]
+  max_escalations: 1
+  refusal_patterns:
+    - "i'm sorry, but i can't"
+    - "i am sorry, but i cannot"
+    - "i can't help with"
+    - "i cannot help with"
+    - "i'm unable to"
+    - "as an ai language model"
+
+# What we keep about user prompts (data minimisation)
+privacy:
+  store_prompts: true             # false = routing misses keep features only, never the text
+  max_prompt_chars: 2000
