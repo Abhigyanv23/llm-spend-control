@@ -41,14 +41,18 @@ and measures whether the cheaper answers are actually good enough.
 | Synchronous escalation: pre-call tier bump + post-call cascade (empty, refusal, truncated, bad JSON) | ✅ Phase 4 |
 | Verification spend capped by its own budget; net savings after quality overhead | ✅ Phase 4 |
 | Quality APIs (`/v1/quality`, `/v1/quality/misses`, `/v1/quality/queue`) | ✅ Phase 4 |
-| Cost dashboard | ⏳ Phase 5 |
+| Analytics columns + backfill (tier, source, escalation, baseline cost, prompt fingerprint) | ✅ Phase 5 |
+| Analytics API: spend series, projections, top patterns, savings, quality, latency, errors | ✅ Phase 5 |
+| Month-end projections (run-rate, 7-day, EWMA), burn-down, exhaustion date per budget | ✅ Phase 5 |
+| Gross vs net savings (after verification spend); Wilson intervals; p50/p95/p99 latency | ✅ Phase 5 |
+| Streamlit cost dashboard over the analytics API; deterministic demo data | ✅ Phase 5 |
 | 1,000-request simulation & savings report | ⏳ Phase 6 |
 
 ## Tech Stack
 
 Python 3.11+ · FastAPI · httpx (async) · Pydantic v2 · PyYAML · PostgreSQL 16 · SQLAlchemy 2.0
-(async) + asyncpg · Alembic · Redis 7 (Lua scripts, Streams) · Docker Compose · pytest + fakeredis
-*(Coming: Streamlit · scikit-learn)*
+(async) + asyncpg · Alembic · Redis 7 (Lua scripts, Streams) · Streamlit + Altair · Docker Compose
+· pytest + fakeredis
 
 ## Quickstart
 
@@ -67,10 +71,12 @@ python -m alembic upgrade head               # create tables (migrations 0001 + 
 python scripts/seed_budgets.py               # example budget policies (incl. quality-verifier)
 python -m uvicorn app.main:app --reload      # terminal 1: the API
 python -m app.worker                         # terminal 2: the verification worker
+python -m streamlit run dashboard/app.py     # terminal 3: the cost dashboard
 ```
 
-Open **http://127.0.0.1:8000/docs** for the interactive API. The worker is optional: without
-it, sampled jobs simply wait in the queue until one runs.
+Open **http://127.0.0.1:8000/docs** for the interactive API and **http://localhost:8501** for the
+dashboard. The worker is optional: without it, sampled jobs simply wait in the queue until one
+runs. For a dashboard with content right away: `python scripts/seed_demo_data.py`.
 
 ### Tests
 
@@ -79,6 +85,7 @@ python -m pytest                             # unit + in-process API tests (no D
 python scripts/smoke_test.py                 # end-to-end: gateway + budgets (running server)
 python scripts/smoke_routing.py              # end-to-end: routing (running server, ROUTING_PROFILE=dev)
 python scripts/smoke_quality.py              # end-to-end: escalation, queue, worker, quality API
+python scripts/smoke_dashboard.py            # end-to-end: analytics API + headless dashboard
 ```
 
 `pytest` uses fakeredis and SQLite, so it runs anywhere in seconds. The smoke tests exercise
@@ -194,6 +201,29 @@ Invoke-RestMethod "http://127.0.0.1:8000/v1/quality/queue"    # stream length, p
 cost 20× to 90× the requests being checked, turning net savings negative. Sampling rates are
 a budget decision; `/v1/quality` reports `net_savings_usd` after verification spend.
 
+## Cost dashboard
+
+```powershell
+python scripts/seed_demo_data.py             # optional: 45 days of demo traffic (demo-* teams)
+python -m streamlit run dashboard/app.py     # http://localhost:8501
+python scripts/seed_demo_data.py --reset     # remove the demo data again
+```
+
+![Dashboard overview](docs/images/dashboard-overview.png)
+*(Screenshot placeholder: add `docs/images/dashboard-overview.png`.)*
+
+| Tab | Shows |
+|---|---|
+| Overview | Spend today / month-to-date, projected month end, net savings, verifier pass rate (95% CI), escalation and error rates, scopes at risk, active budget alerts |
+| Spend | Daily cost by team / feature / model (zero-filled, UTC), cost by model, most expensive prompt patterns |
+| Budgets | Run-rate, 7-day and EWMA projections vs monthly limits, status, exhaustion date, burn-down chart |
+| Savings | Baseline (all on the strongest model) vs actual vs actual + verification; gross and net savings by feature and tier |
+| Routing quality | Tier mix, pass rate per model with Wilson intervals, escalations, downgrades/blocks/overrides, routing misses |
+| Performance | p50/p95/p99 latency by model, error rate by provider and code |
+
+The dashboard reads **only** from `/v1/analytics/*` (set `GATEWAY_URL` to point it elsewhere);
+responses are cached for `ANALYTICS_CACHE_TTL_S` seconds and stamped with "data as of".
+
 ### Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -221,6 +251,12 @@ a budget decision; `/v1/quality` reports `net_savings_usd` after verification sp
 | `/v1/quality/queue` shows `pending` > 0 that never drains | A worker crashed mid-job | Start a worker: jobs idle longer than `job_timeout_s` are reclaimed automatically |
 | `dead_letter` > 0 | Jobs failed `max_attempts` times or were malformed | `docker exec spend-redis redis-cli XRANGE quality:verify:dead - +` shows the reasons |
 | Verifications are all `skipped` | The `quality-verifier` budget is exhausted | Raise it (`PUT /v1/budgets/team/quality-verifier`) or lower the sample rates |
+| `No module named streamlit` | Dashboard dependencies not installed | `python -m pip install -r requirements.txt` (venv active) |
+| Dashboard: "Could not load ... Is the API running?" | API not running, or on another address | Start `uvicorn`; set `GATEWAY_URL` before `streamlit run` |
+| Dashboard charts are empty | No traffic in the selected window | `python scripts/seed_demo_data.py`, or widen the window |
+| New requests don't show up in the dashboard | Analytics responses are cached (default 30 s) | Wait, press **Refresh data**, or set `ANALYTICS_CACHE_TTL_S=0` |
+| `400 invalid_window` from `/v1/analytics/*` | `from` ≥ `to`, or window > `ANALYTICS_MAX_WINDOW_DAYS` | Fix the parameters |
+| `column "routed_tier" does not exist` | Migration 0003 not applied | `python -m alembic upgrade head` |
 
 ## Configuration
 
@@ -243,6 +279,9 @@ a budget decision; `/v1/quality` reports `net_savings_usd` after verification sp
 | `VERIFY_ENABLED` | `true` | `false` disables sampling and async verification (escalation still works) |
 | `WORKER_CONCURRENCY` | `4` | Verification jobs processed in parallel per worker |
 | `WORKER_CONSUMER_NAME` | `<hostname>-<pid>` | Consumer name in the Redis consumer group; unique per worker process |
+| `ANALYTICS_CACHE_TTL_S` | `30` | Seconds an analytics response may be served from cache (`0` = off) |
+| `ANALYTICS_MAX_WINDOW_DAYS` | `366` | Longest allowed `from`→`to` window for analytics queries |
+| `GATEWAY_URL` | `http://127.0.0.1:8000` | Where the dashboard (and the smoke scripts) find the API |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `spend` / `spend_dev_password` / `spend` | Used by `docker compose` to initialise Postgres |
 | `POSTGRES_PORT` / `REDIS_PORT` | `5432` / `6379` | Host ports published by `docker compose` |
 
@@ -265,15 +304,18 @@ app/
 ├── schemas.py         Canonical request/response + budget/usage models
 ├── errors.py          Normalised error types (incl. 402 / 503 budget and routing errors)
 ├── config.py          Environment settings
-├── api/               /v1/usage, /v1/budgets, /v1/routing, /v1/quality routers
+├── api/               /v1/usage, /v1/budgets, /v1/routing, /v1/quality, /v1/analytics routers
+├── analytics/         pure query functions: spend, projections, savings, quality, latency, KPIs
+├── fingerprint.py     prompt fingerprints (SHA-256 of normalised instructions) and previews
 ├── budgets/           periods, Lua scripts, Redis store, policies, service, reconciliation
 ├── routing/           routing config loader, rule-based classifier, router
 ├── quality/           quality config, sampling, judges, escalation, jobs, queue, worker, reports
 ├── db/                SQLAlchemy engine/session + ORM models
 └── providers/         One adapter per provider (Adapter pattern); mock with capability limits
-migrations/            Alembic environment + versioned schema migrations (0001, 0002)
+dashboard/app.py       Streamlit dashboard (reads only from the analytics API)
+migrations/            Alembic environment + versioned schema migrations (0001-0003)
 config/                models.yaml, routing.yaml, quality.yaml
-scripts/               Smoke tests, budget seeding, routing-miss export
+scripts/               Smoke tests, budget and demo-data seeding, routing-miss export
 tests/                 pytest suite (fakeredis + SQLite)
 docs/                  Architecture, API reference, per-phase design, theory notes, change records
 docker-compose.yml     Postgres 16 + Redis 7
@@ -289,16 +331,18 @@ docker-compose.yml     Postgres 16 + Redis 7
 - The similarity judge only suits the mocks; real answers need the LLM judge, which has its own biases.
 - Post-call checks only catch *visible* failures; a fluent but wrong answer is only found by sampling.
 - Routing and quality config are loaded at startup; changes need a restart.
-- Full lists: [Phase 2](docs/phases/phase-2-budgets.md#known-limitations) · [Phase 3](docs/phases/phase-3-routing.md#known-limitations) · [Phase 4](docs/phases/phase-4-quality.md#known-limitations)
+- Analytics run on the transactional database; at scale they belong on a replica or warehouse with rollups.
+- Month-end projections don't model weekly seasonality or growth explicitly.
+- Full lists: [Phase 2](docs/phases/phase-2-budgets.md#known-limitations) · [Phase 3](docs/phases/phase-3-routing.md#known-limitations) · [Phase 4](docs/phases/phase-4-quality.md#known-limitations) · [Phase 5](docs/phases/phase-5-dashboard.md#known-limitations)
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
 - [API Reference](docs/api.md)
 - [Changelog](CHANGELOG.md)
-- Phase notes: [Phase 1: Gateway](docs/phases/phase-1-gateway.md) · [Phase 2: Budgets](docs/phases/phase-2-budgets.md) · [Phase 3: Routing](docs/phases/phase-3-routing.md) · [Phase 4: Quality](docs/phases/phase-4-quality.md)
-- Theory notes: [Phase 2](docs/notes/phase-2-theory.md) · [Phase 3](docs/notes/phase-3-theory.md) · [Phase 4](docs/notes/phase-4-theory.md)
-- Change records: [Phase 2](docs/phases/phase-2-changes.md) · [Phase 3](docs/phases/phase-3-changes.md) · [Phase 4](docs/phases/phase-4-changes.md)
+- Phase notes: [Phase 1: Gateway](docs/phases/phase-1-gateway.md) · [Phase 2: Budgets](docs/phases/phase-2-budgets.md) · [Phase 3: Routing](docs/phases/phase-3-routing.md) · [Phase 4: Quality](docs/phases/phase-4-quality.md) · [Phase 5: Dashboard](docs/phases/phase-5-dashboard.md)
+- Theory notes: [Phase 2](docs/notes/phase-2-theory.md) · [Phase 3](docs/notes/phase-3-theory.md) · [Phase 4](docs/notes/phase-4-theory.md) · [Phase 5](docs/notes/phase-5-theory.md)
+- Change records: [Phase 2](docs/phases/phase-2-changes.md) · [Phase 3](docs/phases/phase-3-changes.md) · [Phase 4](docs/phases/phase-4-changes.md) · [Phase 5](docs/phases/phase-5-changes.md)
 
 ## Authors
 

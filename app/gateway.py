@@ -10,6 +10,7 @@ from app.audit import AuditRecord
 from app.budgets import BudgetService, Reservation
 from app.errors import (BudgetExceededError, ContextTooLongError, GatewayError,
                         OverrideRequiredError)
+from app.fingerprint import prompt_fingerprint, prompt_preview
 from app.money import usd_str
 from app.providers.base import ProviderAdapter, ProviderResult
 from app.quality import QualityConfig, decide_sampling
@@ -119,7 +120,9 @@ class Gateway:
         override_reason = _clean_reason(override_reason)
         record = AuditRecord(request_id=request_id, created_at=now, team_id=request.team_id,
                              feature=request.feature, priority=request.priority.value,
-                             model=request.model)
+                             model=request.model,
+                             prompt_fingerprint=prompt_fingerprint(request),
+                             prompt_preview=self._preview(request))
         reservation: Reservation | None = None
         settled = False
         decision: RouteDecision | None = None
@@ -136,7 +139,11 @@ class Gateway:
                 decision, pre_call = apply_pre_call_escalation(
                     self.router, self.quality.escalation, request, decision)
                 escalation = {"pre_call": pre_call, "attempts": [], "escalated": False}
+                record.pre_escalated = bool(pre_call and pre_call.get("applied"))
             record.model = decision.model
+            record.route_source = decision.source
+            if decision.classification is not None:
+                record.classifier_confidence = decision.classification.confidence
 
             # 2. Reserve BEFORE spending (downgrading if a budget blocks). Raises 402/503.
             spec, reservation = await self._reserve_with_downgrade(
@@ -183,6 +190,7 @@ class Gateway:
                 routing_meta.update(baseline_model=baseline_model,
                                     baseline_cost_usd=usd_str(baseline_usd),
                                     savings_usd=usd_str(baseline_usd - total_cost))
+                record.baseline_cost_usd = baseline_usd
 
             # 7. Should a stronger model double-check this answer later? Not if the cascade
             #    already replaced it.
@@ -192,6 +200,9 @@ class Gateway:
 
             # One audit row per request: the returned answer's model, ALL attempts' cost
             record.model, record.provider = final_spec.name, final_spec.provider
+            record.routed_tier = final_spec.tier
+            record.escalated = esc.escalations > 0
+            record.downgraded = bool(downgrades)
             record.input_tokens, record.output_tokens = total_in, total_out
             record.cost_usd = total_cost
             record.estimated_cost_usd = record.estimated_cost_usd + esc.estimate
@@ -219,6 +230,8 @@ class Gateway:
 
         except GatewayError as exc:
             record.status, record.error_code = exc.audit_status, exc.code
+            record.routed_tier = spec.tier if spec is not None else None
+            record.downgraded = bool(downgrades)
             record.metadata = {"error": exc.message[:500], "details": dict(exc.extra),
                                "routing": _routing_metadata(decision, spec, downgrades)}
             exc.extra.setdefault("request_id", request_id)
@@ -239,6 +252,15 @@ class Gateway:
             # finish even if this task is being cancelled.
             if reservation is not None and not settled:
                 await asyncio.shield(self.budgets.release(reservation))
+
+    def _preview(self, request: ChatRequest) -> str | None:
+        """A short prompt preview for analytics, only if privacy settings allow it."""
+        if self.quality is None:
+            return None
+        privacy = self.quality.privacy
+        if not privacy.store_prompts or privacy.prompt_preview_chars == 0:
+            return None
+        return prompt_preview(request, privacy.prompt_preview_chars)
 
     def _check(self, request: ChatRequest, decision: RouteDecision,
                result: ProviderResult) -> str | None:

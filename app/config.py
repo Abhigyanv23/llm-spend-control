@@ -34,5 +34,9 @@ class Settings(BaseSettings):
     worker_concurrency: int = Field(default=4, ge=1, le=64)   # jobs processed in parallel
     worker_consumer_name: str | None = None   # unique per worker process; default host-pid
 
+    # Phase 5: analytics API + dashboard
+    analytics_cache_ttl_s: float = Field(default=30.0, ge=0)   # 0 disables the cache
+    analytics_max_window_days: int = Field(default=366, ge=1)
+
 
 settings = Settings()

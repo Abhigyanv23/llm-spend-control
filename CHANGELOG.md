@@ -2,6 +2,34 @@
 
 All notable changes, grouped by build phase.
 
+## [0.5.0] - Phase 5: Cost Dashboard
+
+### Added
+- Migration `0003`: analytics columns on `request_logs` (`routed_tier`, `route_source`,
+  `classifier_confidence`, `baseline_cost_usd`, `escalated`, `pre_escalated`, `downgraded`,
+  `prompt_fingerprint`, `prompt_preview`), backfilled from `metadata` (set-based on Postgres),
+  new indexes `(model, created_at)` and `(prompt_fingerprint, created_at)`, and the team index
+  upgraded to covering (`INCLUDE (cost_usd)`).
+- Prompt fingerprints (`app/fingerprint.py`): SHA-256 of normalised instruction text; optional
+  preview controlled by `privacy.prompt_preview_chars` (and `store_prompts`).
+- Analytics layer `app/analytics/`: zero-filled daily spend by team/feature/model, cost by model,
+  top requests and prompt patterns, month-end projections (run-rate, trailing 7-day, EWMA) with
+  status, exhaustion date and burn-down, gross/net savings by feature and tier, routing quality
+  with Wilson 95% intervals, p50/p95/p99 latency (Postgres `percentile_cont` + Python fallback),
+  error breakdown, headline KPIs.
+- `/v1/analytics/summary`, `/spend`, `/projections`, `/top`, `/savings`, `/quality`,
+  `/latency`, `/errors` with window validation (`400 invalid_window`) and a TTL cache.
+- Streamlit dashboard `dashboard/app.py` (6 tabs, Altair charts, reads only from the API).
+- `scripts/seed_demo_data.py` (deterministic, idempotent, `--reset`) and
+  `scripts/smoke_dashboard.py` (22 checks including a headless dashboard render).
+- Settings `ANALYTICS_CACHE_TTL_S`, `ANALYTICS_MAX_WINDOW_DAYS`; `GATEWAY_URL` for the dashboard.
+- 44 new tests (254 total).
+
+### Changed
+- The gateway writes the analytics columns and a prompt fingerprint for every request.
+- `requirements.txt` gains a dashboard section (`streamlit`, `altair`).
+- App version `0.5.0`.
+
 ## [0.4.0] - Phase 4: Quality Checks and Escalation
 
 ### Added
