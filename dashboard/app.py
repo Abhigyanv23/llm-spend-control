@@ -145,8 +145,10 @@ with tabs[1]:
         for column in ("cost_usd", "avg_cost_usd"):
             models[column] = models[column].map(usd)
         st.dataframe(models, hide_index=True, width="stretch",
-                     column_config={"cost_usd": st.column_config.NumberColumn("Cost (USD)", format="$%.4f"),
-                                    "avg_cost_usd": st.column_config.NumberColumn("Avg / request", format="$%.6f")})
+                     column_config={
+                         "cost_usd": st.column_config.NumberColumn("Cost (USD)", format="$%.4f"),
+                         "avg_cost_usd": st.column_config.NumberColumn("Avg / request",
+                                                                       format="$%.6f")})
         st.subheader("Most expensive prompt patterns")
         top = api("top", **window, kind="patterns", limit=10)
         if top and top["items"]:

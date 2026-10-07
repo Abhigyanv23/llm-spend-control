@@ -1,0 +1,25 @@
+# Tool configuration only (the app is run from source, not installed as a package).
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"          # CI tests 3.11 and 3.13: no 3.12+ syntax
+extend-exclude = ["reports", "data"]
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, import order, bugbear, pyupgrade, simplify, async pitfalls
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "ASYNC"]
+ignore = [
+    "B008",     # FastAPI's Depends()/Query() in argument defaults is the intended idiom
+    "SIM108",   # ternaries are not always clearer than if/else
+    "UP042",    # keep `class Priority(str, Enum)`: StrEnum changes str()/format() behaviour,
+                # which would silently alter the Phase 1 API contract
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["E402"]            # scripts put the project root on sys.path before importing app
+"scripts/generate_workload.py" = ["E402", "E501"]   # prompt templates are data: don't wrap them
+"tests/*" = ["ASYNC230"]          # reading small fixture files in async tests is fine
+"migrations/*" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "scripts"]

@@ -3,9 +3,24 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import (JSON, Boolean, CheckConstraint, DateTime, Float, Index, Integer,
-                        MetaData, Numeric, String, Text, UniqueConstraint, Uuid, false, func,
-                        true)
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    MetaData,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    false,
+    func,
+    true,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 

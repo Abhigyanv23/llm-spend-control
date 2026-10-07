@@ -1,0 +1,1106 @@
+{
+  "run_id": "final-v2",
+  "real_providers": false,
+  "prompts": 1000,
+  "git_commit": "3701c2d",
+  "dataset_sha256": "6f6c16ca3da084580ff342081f439b417c0122fa046ece408ab2415cf4265576",
+  "modes": {
+    "A": {
+      "mode": "A",
+      "sample_rate": null,
+      "cost": {
+        "requests": 1000,
+        "succeeded": 975,
+        "blocked": 25,
+        "errors": 0,
+        "cost_usd": "1.02083100",
+        "verification_cost_usd": "0",
+        "total_cost_usd": "1.02083100",
+        "cost_per_1k_usd": "1.020831000"
+      },
+      "visible_failures": {
+        "cheap_attempt_failed": 0,
+        "returned_broken": 0,
+        "first_failure_by_check": {},
+        "still_broken_by_check": {},
+        "escalated": 0,
+        "pre_call_escalated": 0
+      },
+      "latency_client": {
+        "p50_ms": 369.3,
+        "p95_ms": 508.24,
+        "p99_ms": 594.06,
+        "n": 975
+      },
+      "latency_server_by_model": {
+        "mock-large": {
+          "p50_ms": 66.89,
+          "p95_ms": 128.18,
+          "p99_ms": 164.95,
+          "n": 975
+        }
+      },
+      "cost_by_served_tier": {
+        "3": {
+          "requests": 975,
+          "cost_usd": "1.02083100"
+        }
+      },
+      "budget_events": {
+        "advisory": {
+          "requests": 60,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "engineering": {
+          "requests": 210,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "marketing": {
+          "requests": 50,
+          "warnings": 9,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 25
+        },
+        "ops": {
+          "requests": 460,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "support": {
+          "requests": 220,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        }
+      }
+    },
+    "B": {
+      "mode": "B",
+      "sample_rate": null,
+      "cost": {
+        "requests": 1000,
+        "succeeded": 1000,
+        "blocked": 0,
+        "errors": 0,
+        "cost_usd": "0.36040170",
+        "verification_cost_usd": "0",
+        "total_cost_usd": "0.36040170",
+        "cost_per_1k_usd": "0.3604017000"
+      },
+      "visible_failures": {
+        "cheap_attempt_failed": 70,
+        "returned_broken": 70,
+        "first_failure_by_check": {
+          "empty": 8,
+          "invalid_json": 47,
+          "refusal": 8,
+          "truncated": 7
+        },
+        "still_broken_by_check": {
+          "empty": 8,
+          "invalid_json": 47,
+          "refusal": 8,
+          "truncated": 7
+        },
+        "escalated": 0,
+        "pre_call_escalated": 0
+      },
+      "latency_client": {
+        "p50_ms": 362.43,
+        "p95_ms": 480.36,
+        "p99_ms": 579.39,
+        "n": 1000
+      },
+      "latency_server_by_model": {
+        "mock-echo": {
+          "p50_ms": 65.22,
+          "p95_ms": 128.48,
+          "p99_ms": 155.56,
+          "n": 433
+        },
+        "mock-large": {
+          "p50_ms": 63.48,
+          "p95_ms": 119.07,
+          "p99_ms": 139.73,
+          "n": 267
+        },
+        "mock-medium": {
+          "p50_ms": 68.67,
+          "p95_ms": 137.53,
+          "p99_ms": 165.71,
+          "n": 300
+        }
+      },
+      "cost_by_served_tier": {
+        "1": {
+          "requests": 433,
+          "cost_usd": "0.00660870"
+        },
+        "2": {
+          "requests": 300,
+          "cost_usd": "0.21378000"
+        },
+        "3": {
+          "requests": 267,
+          "cost_usd": "0.14001300"
+        }
+      },
+      "budget_events": {
+        "advisory": {
+          "requests": 60,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "engineering": {
+          "requests": 210,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "marketing": {
+          "requests": 50,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "ops": {
+          "requests": 460,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "support": {
+          "requests": 220,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        }
+      },
+      "routing_served": {
+        "scored": 1000,
+        "accuracy_pct": 91.7,
+        "adequately_served_pct": 97.7,
+        "under_routed": 23,
+        "under_routed_pct": 2.3,
+        "over_routed": 60,
+        "over_routed_pct": 6.0,
+        "per_tier": {
+          "1": {
+            "support": 480,
+            "recall": 87.5,
+            "precision": 97.0
+          },
+          "2": {
+            "support": 270,
+            "recall": 100.0,
+            "precision": 90.0
+          },
+          "3": {
+            "support": 250,
+            "recall": 90.8,
+            "precision": 85.02
+          }
+        }
+      },
+      "confusion_served": [
+        [
+          420,
+          20,
+          40
+        ],
+        [
+          0,
+          270,
+          0
+        ],
+        [
+          13,
+          10,
+          227
+        ]
+      ],
+      "vs_baseline": {
+        "paired_requests": 975,
+        "baseline_cost_usd": "1.02083100",
+        "cost_usd": "0.35253970",
+        "verification_cost_usd": "0",
+        "gross_savings_usd": "0.66829130",
+        "gross_savings_pct": 65.47,
+        "net_savings_usd": "0.66829130",
+        "net_savings_pct": 65.47
+      }
+    },
+    "C": {
+      "mode": "C",
+      "sample_rate": 0.1,
+      "cost": {
+        "requests": 1000,
+        "succeeded": 1000,
+        "blocked": 0,
+        "errors": 0,
+        "cost_usd": "0.37832170",
+        "verification_cost_usd": "0.24165300",
+        "total_cost_usd": "0.61997470",
+        "cost_per_1k_usd": "0.6199747000"
+      },
+      "visible_failures": {
+        "cheap_attempt_failed": 69,
+        "returned_broken": 47,
+        "first_failure_by_check": {
+          "empty": 8,
+          "invalid_json": 47,
+          "refusal": 8,
+          "truncated": 6
+        },
+        "still_broken_by_check": {
+          "invalid_json": 47
+        },
+        "escalated": 69,
+        "pre_call_escalated": 31
+      },
+      "latency_client": {
+        "p50_ms": 395.5,
+        "p95_ms": 620.98,
+        "p99_ms": 837.04,
+        "n": 1000
+      },
+      "latency_server_by_model": {
+        "mock-echo": {
+          "p50_ms": 66.41,
+          "p95_ms": 132.9,
+          "p99_ms": 169.43,
+          "n": 347
+        },
+        "mock-large": {
+          "p50_ms": 66.3,
+          "p95_ms": 144.69,
+          "p99_ms": 221.63,
+          "n": 281
+        },
+        "mock-medium": {
+          "p50_ms": 74.38,
+          "p95_ms": 191.29,
+          "p99_ms": 276.51,
+          "n": 372
+        }
+      },
+      "cost_by_served_tier": {
+        "1": {
+          "requests": 347,
+          "cost_usd": "0.00506670"
+        },
+        "2": {
+          "requests": 372,
+          "cost_usd": "0.22514800"
+        },
+        "3": {
+          "requests": 281,
+          "cost_usd": "0.14810700"
+        }
+      },
+      "budget_events": {
+        "advisory": {
+          "requests": 60,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "engineering": {
+          "requests": 210,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "marketing": {
+          "requests": 50,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "ops": {
+          "requests": 460,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "support": {
+          "requests": 220,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        }
+      },
+      "routing_served": {
+        "scored": 1000,
+        "accuracy_pct": 83.5,
+        "adequately_served_pct": 98.0,
+        "under_routed": 20,
+        "under_routed_pct": 2.0,
+        "over_routed": 145,
+        "over_routed_pct": 14.5,
+        "per_tier": {
+          "1": {
+            "support": 480,
+            "recall": 69.79,
+            "precision": 96.54
+          },
+          "2": {
+            "support": 270,
+            "recall": 100.0,
+            "precision": 72.58
+          },
+          "3": {
+            "support": 250,
+            "recall": 92.0,
+            "precision": 81.85
+          }
+        }
+      },
+      "confusion_served": [
+        [
+          335,
+          94,
+          51
+        ],
+        [
+          0,
+          270,
+          0
+        ],
+        [
+          12,
+          8,
+          230
+        ]
+      ],
+      "vs_baseline": {
+        "paired_requests": 975,
+        "baseline_cost_usd": "1.02083100",
+        "cost_usd": "0.37045970",
+        "verification_cost_usd": "0.23894100",
+        "gross_savings_usd": "0.65037130",
+        "gross_savings_pct": 63.71,
+        "net_savings_usd": "0.41143030",
+        "net_savings_pct": 40.3
+      },
+      "verification": {
+        "verified": 152,
+        "pass": 148,
+        "fail": 4,
+        "inconclusive": 0,
+        "skipped": 0,
+        "judged": 152,
+        "pass_rate_pct": 97.37,
+        "pass_rate_ci95_pct": [
+          93.4,
+          99.0
+        ],
+        "fail_rate_when_under_routed_pct": 0.0,
+        "misses_by_category": {
+          "long_input": 4
+        }
+      }
+    },
+    "C0.05": {
+      "mode": "C",
+      "sample_rate": 0.05,
+      "cost": {
+        "requests": 1000,
+        "succeeded": 1000,
+        "blocked": 0,
+        "errors": 0,
+        "cost_usd": "0.37832170",
+        "verification_cost_usd": "0.09111000",
+        "total_cost_usd": "0.46943170",
+        "cost_per_1k_usd": "0.4694317000"
+      },
+      "visible_failures": {
+        "cheap_attempt_failed": 69,
+        "returned_broken": 47,
+        "first_failure_by_check": {
+          "empty": 8,
+          "invalid_json": 47,
+          "refusal": 8,
+          "truncated": 6
+        },
+        "still_broken_by_check": {
+          "invalid_json": 47
+        },
+        "escalated": 69,
+        "pre_call_escalated": 31
+      },
+      "latency_client": {
+        "p50_ms": 372.62,
+        "p95_ms": 588.5,
+        "p99_ms": 817.57,
+        "n": 1000
+      },
+      "latency_server_by_model": {
+        "mock-echo": {
+          "p50_ms": 66.66,
+          "p95_ms": 124.56,
+          "p99_ms": 141.78,
+          "n": 347
+        },
+        "mock-large": {
+          "p50_ms": 65.98,
+          "p95_ms": 154.13,
+          "p99_ms": 175.58,
+          "n": 281
+        },
+        "mock-medium": {
+          "p50_ms": 75.19,
+          "p95_ms": 183.99,
+          "p99_ms": 248.31,
+          "n": 372
+        }
+      },
+      "cost_by_served_tier": {
+        "1": {
+          "requests": 347,
+          "cost_usd": "0.00506670"
+        },
+        "2": {
+          "requests": 372,
+          "cost_usd": "0.22514800"
+        },
+        "3": {
+          "requests": 281,
+          "cost_usd": "0.14810700"
+        }
+      },
+      "budget_events": {
+        "advisory": {
+          "requests": 60,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "engineering": {
+          "requests": 210,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "marketing": {
+          "requests": 50,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "ops": {
+          "requests": 460,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "support": {
+          "requests": 220,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        }
+      },
+      "routing_served": {
+        "scored": 1000,
+        "accuracy_pct": 83.5,
+        "adequately_served_pct": 98.0,
+        "under_routed": 20,
+        "under_routed_pct": 2.0,
+        "over_routed": 145,
+        "over_routed_pct": 14.5,
+        "per_tier": {
+          "1": {
+            "support": 480,
+            "recall": 69.79,
+            "precision": 96.54
+          },
+          "2": {
+            "support": 270,
+            "recall": 100.0,
+            "precision": 72.58
+          },
+          "3": {
+            "support": 250,
+            "recall": 92.0,
+            "precision": 81.85
+          }
+        }
+      },
+      "confusion_served": [
+        [
+          335,
+          94,
+          51
+        ],
+        [
+          0,
+          270,
+          0
+        ],
+        [
+          12,
+          8,
+          230
+        ]
+      ],
+      "vs_baseline": {
+        "paired_requests": 975,
+        "baseline_cost_usd": "1.02083100",
+        "cost_usd": "0.37045970",
+        "verification_cost_usd": "0.08802300",
+        "gross_savings_usd": "0.65037130",
+        "gross_savings_pct": 63.71,
+        "net_savings_usd": "0.56234830",
+        "net_savings_pct": 55.09
+      },
+      "verification": {
+        "verified": 81,
+        "pass": 80,
+        "fail": 1,
+        "inconclusive": 0,
+        "skipped": 0,
+        "judged": 81,
+        "pass_rate_pct": 98.77,
+        "pass_rate_ci95_pct": [
+          93.3,
+          99.8
+        ],
+        "fail_rate_when_under_routed_pct": 0.0,
+        "misses_by_category": {
+          "long_input": 1
+        }
+      }
+    },
+    "C0.25": {
+      "mode": "C",
+      "sample_rate": 0.25,
+      "cost": {
+        "requests": 1000,
+        "succeeded": 1000,
+        "blocked": 0,
+        "errors": 0,
+        "cost_usd": "0.37832170",
+        "verification_cost_usd": "0.36997200",
+        "total_cost_usd": "0.74829370",
+        "cost_per_1k_usd": "0.7482937000"
+      },
+      "visible_failures": {
+        "cheap_attempt_failed": 69,
+        "returned_broken": 47,
+        "first_failure_by_check": {
+          "empty": 8,
+          "invalid_json": 47,
+          "refusal": 8,
+          "truncated": 6
+        },
+        "still_broken_by_check": {
+          "invalid_json": 47
+        },
+        "escalated": 69,
+        "pre_call_escalated": 31
+      },
+      "latency_client": {
+        "p50_ms": 362.67,
+        "p95_ms": 565.95,
+        "p99_ms": 778.04,
+        "n": 1000
+      },
+      "latency_server_by_model": {
+        "mock-echo": {
+          "p50_ms": 67.98,
+          "p95_ms": 129.8,
+          "p99_ms": 163.25,
+          "n": 347
+        },
+        "mock-large": {
+          "p50_ms": 70.34,
+          "p95_ms": 132.69,
+          "p99_ms": 193.76,
+          "n": 281
+        },
+        "mock-medium": {
+          "p50_ms": 72.7,
+          "p95_ms": 179.78,
+          "p99_ms": 229.19,
+          "n": 372
+        }
+      },
+      "cost_by_served_tier": {
+        "1": {
+          "requests": 347,
+          "cost_usd": "0.00506670"
+        },
+        "2": {
+          "requests": 372,
+          "cost_usd": "0.22514800"
+        },
+        "3": {
+          "requests": 281,
+          "cost_usd": "0.14810700"
+        }
+      },
+      "budget_events": {
+        "advisory": {
+          "requests": 60,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "engineering": {
+          "requests": 210,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "marketing": {
+          "requests": 50,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "ops": {
+          "requests": 460,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "support": {
+          "requests": 220,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        }
+      },
+      "routing_served": {
+        "scored": 1000,
+        "accuracy_pct": 83.5,
+        "adequately_served_pct": 98.0,
+        "under_routed": 20,
+        "under_routed_pct": 2.0,
+        "over_routed": 145,
+        "over_routed_pct": 14.5,
+        "per_tier": {
+          "1": {
+            "support": 480,
+            "recall": 69.79,
+            "precision": 96.54
+          },
+          "2": {
+            "support": 270,
+            "recall": 100.0,
+            "precision": 72.58
+          },
+          "3": {
+            "support": 250,
+            "recall": 92.0,
+            "precision": 81.85
+          }
+        }
+      },
+      "confusion_served": [
+        [
+          335,
+          94,
+          51
+        ],
+        [
+          0,
+          270,
+          0
+        ],
+        [
+          12,
+          8,
+          230
+        ]
+      ],
+      "vs_baseline": {
+        "paired_requests": 975,
+        "baseline_cost_usd": "1.02083100",
+        "cost_usd": "0.37045970",
+        "verification_cost_usd": "0.36491100",
+        "gross_savings_usd": "0.65037130",
+        "gross_savings_pct": 63.71,
+        "net_savings_usd": "0.28546030",
+        "net_savings_pct": 27.96
+      },
+      "verification": {
+        "verified": 277,
+        "pass": 272,
+        "fail": 5,
+        "inconclusive": 0,
+        "skipped": 0,
+        "judged": 277,
+        "pass_rate_pct": 98.19,
+        "pass_rate_ci95_pct": [
+          95.8,
+          99.2
+        ],
+        "fail_rate_when_under_routed_pct": 0.0,
+        "misses_by_category": {
+          "long_input": 5
+        }
+      }
+    },
+    "C0.5": {
+      "mode": "C",
+      "sample_rate": 0.5,
+      "cost": {
+        "requests": 1000,
+        "succeeded": 1000,
+        "blocked": 0,
+        "errors": 0,
+        "cost_usd": "0.37832170",
+        "verification_cost_usd": "0.53372700",
+        "total_cost_usd": "0.91204870",
+        "cost_per_1k_usd": "0.9120487000"
+      },
+      "visible_failures": {
+        "cheap_attempt_failed": 69,
+        "returned_broken": 47,
+        "first_failure_by_check": {
+          "empty": 8,
+          "invalid_json": 47,
+          "refusal": 8,
+          "truncated": 6
+        },
+        "still_broken_by_check": {
+          "invalid_json": 47
+        },
+        "escalated": 69,
+        "pre_call_escalated": 31
+      },
+      "latency_client": {
+        "p50_ms": 360.35,
+        "p95_ms": 543.13,
+        "p99_ms": 771.29,
+        "n": 1000
+      },
+      "latency_server_by_model": {
+        "mock-echo": {
+          "p50_ms": 69.75,
+          "p95_ms": 119.67,
+          "p99_ms": 137.13,
+          "n": 347
+        },
+        "mock-large": {
+          "p50_ms": 68.62,
+          "p95_ms": 135.34,
+          "p99_ms": 199.97,
+          "n": 281
+        },
+        "mock-medium": {
+          "p50_ms": 74.73,
+          "p95_ms": 178.95,
+          "p99_ms": 237.85,
+          "n": 372
+        }
+      },
+      "cost_by_served_tier": {
+        "1": {
+          "requests": 347,
+          "cost_usd": "0.00506670"
+        },
+        "2": {
+          "requests": 372,
+          "cost_usd": "0.22514800"
+        },
+        "3": {
+          "requests": 281,
+          "cost_usd": "0.14810700"
+        }
+      },
+      "budget_events": {
+        "advisory": {
+          "requests": 60,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "engineering": {
+          "requests": 210,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "marketing": {
+          "requests": 50,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "ops": {
+          "requests": 460,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        },
+        "support": {
+          "requests": 220,
+          "warnings": 0,
+          "overridden": 0,
+          "downgrades": 0,
+          "blocks": 0
+        }
+      },
+      "routing_served": {
+        "scored": 1000,
+        "accuracy_pct": 83.5,
+        "adequately_served_pct": 98.0,
+        "under_routed": 20,
+        "under_routed_pct": 2.0,
+        "over_routed": 145,
+        "over_routed_pct": 14.5,
+        "per_tier": {
+          "1": {
+            "support": 480,
+            "recall": 69.79,
+            "precision": 96.54
+          },
+          "2": {
+            "support": 270,
+            "recall": 100.0,
+            "precision": 72.58
+          },
+          "3": {
+            "support": 250,
+            "recall": 92.0,
+            "precision": 81.85
+          }
+        }
+      },
+      "confusion_served": [
+        [
+          335,
+          94,
+          51
+        ],
+        [
+          0,
+          270,
+          0
+        ],
+        [
+          12,
+          8,
+          230
+        ]
+      ],
+      "vs_baseline": {
+        "paired_requests": 975,
+        "baseline_cost_usd": "1.02083100",
+        "cost_usd": "0.37045970",
+        "verification_cost_usd": "0.52491600",
+        "gross_savings_usd": "0.65037130",
+        "gross_savings_pct": 63.71,
+        "net_savings_usd": "0.12545530",
+        "net_savings_pct": 12.29
+      },
+      "verification": {
+        "verified": 406,
+        "pass": 400,
+        "fail": 6,
+        "inconclusive": 0,
+        "skipped": 0,
+        "judged": 406,
+        "pass_rate_pct": 98.52,
+        "pass_rate_ci95_pct": [
+          96.8,
+          99.3
+        ],
+        "fail_rate_when_under_routed_pct": 0.0,
+        "misses_by_category": {
+          "long_input": 6
+        }
+      }
+    }
+  },
+  "classifier": {
+    "all": {
+      "scored": 1000,
+      "accuracy_pct": 91.7,
+      "adequately_served_pct": 97.7,
+      "under_routed": 23,
+      "under_routed_pct": 2.3,
+      "over_routed": 60,
+      "over_routed_pct": 6.0,
+      "per_tier": {
+        "1": {
+          "support": 480,
+          "recall": 87.5,
+          "precision": 97.0
+        },
+        "2": {
+          "support": 270,
+          "recall": 100.0,
+          "precision": 90.0
+        },
+        "3": {
+          "support": 250,
+          "recall": 90.8,
+          "precision": 85.02
+        }
+      }
+    },
+    "train": {
+      "scored": 699,
+      "accuracy_pct": 91.42,
+      "adequately_served_pct": 97.57,
+      "under_routed": 17,
+      "under_routed_pct": 2.43,
+      "over_routed": 43,
+      "over_routed_pct": 6.15,
+      "per_tier": {
+        "1": {
+          "support": 332,
+          "recall": 87.05,
+          "precision": 97.64
+        },
+        "2": {
+          "support": 186,
+          "recall": 100.0,
+          "precision": 89.0
+        },
+        "3": {
+          "support": 181,
+          "recall": 90.61,
+          "precision": 84.54
+        }
+      }
+    },
+    "test": {
+      "scored": 301,
+      "accuracy_pct": 92.36,
+      "adequately_served_pct": 98.01,
+      "under_routed": 6,
+      "under_routed_pct": 1.99,
+      "over_routed": 17,
+      "over_routed_pct": 5.65,
+      "per_tier": {
+        "1": {
+          "support": 148,
+          "recall": 88.51,
+          "precision": 95.62
+        },
+        "2": {
+          "support": 84,
+          "recall": 100.0,
+          "precision": 92.31
+        },
+        "3": {
+          "support": 69,
+          "recall": 91.3,
+          "precision": 86.3
+        }
+      }
+    },
+    "confusion": [
+      [
+        420,
+        20,
+        40
+      ],
+      [
+        0,
+        270,
+        0
+      ],
+      [
+        13,
+        10,
+        227
+      ]
+    ]
+  },
+  "escalation_rescue": {
+    "broken_in_B": 70,
+    "broken_in_C": 47,
+    "rescued_by_escalation": 23
+  },
+  "sample_rate_sweep": [
+    {
+      "label": "C0.05",
+      "sample_rate": 0.05,
+      "verified": 81,
+      "pass_rate_pct": 98.77,
+      "ci95_pct": [
+        93.3,
+        99.8
+      ],
+      "verification_cost_usd": "0.09111000",
+      "net_savings_pct": 55.09
+    },
+    {
+      "label": "C",
+      "sample_rate": 0.1,
+      "verified": 152,
+      "pass_rate_pct": 97.37,
+      "ci95_pct": [
+        93.4,
+        99.0
+      ],
+      "verification_cost_usd": "0.24165300",
+      "net_savings_pct": 40.3
+    },
+    {
+      "label": "C0.25",
+      "sample_rate": 0.25,
+      "verified": 277,
+      "pass_rate_pct": 98.19,
+      "ci95_pct": [
+        95.8,
+        99.2
+      ],
+      "verification_cost_usd": "0.36997200",
+      "net_savings_pct": 27.96
+    },
+    {
+      "label": "C0.5",
+      "sample_rate": 0.5,
+      "verified": 406,
+      "pass_rate_pct": 98.52,
+      "ci95_pct": [
+        96.8,
+        99.3
+      ],
+      "verification_cost_usd": "0.53372700",
+      "net_savings_pct": 12.29
+    }
+  ]
+}

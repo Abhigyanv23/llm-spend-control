@@ -133,14 +133,11 @@ class Reservation:
 
 class BudgetService:
     def __init__(self, store: RedisBudgetStore, session_factory: async_sessionmaker,
-                 warn_threshold: Decimal = Decimal("0.8"), fail_mode: str = "open",
-                 verifier_scope: tuple[str, str] | None = None):
+                 warn_threshold: Decimal = Decimal("0.8"), fail_mode: str = "open"):
         self.store = store
         self.session_factory = session_factory
         self.warn_threshold = warn_threshold
         self.fail_mode = fail_mode
-        # (team_id, feature) that verification spend is charged to; reconciliation needs it
-        self.verifier_scope = verifier_scope
 
     # ------------------------------------------------------------ reserve
 
@@ -168,7 +165,7 @@ class BudgetService:
             return self._on_unavailable(counters, amount, estimate_usd, now, exc)
 
         checks = [LimitCheck(c, lim, v.spent, v.reserved, amount)
-                  for c, lim, v in zip(counters, limits_nanos, values) if lim is not None]
+                  for c, lim, v in zip(counters, limits_nanos, values, strict=True) if lim is not None]
         # Strictest outcome wins: the most-exceeded limit is the one reported
         exceeded = sorted((ch for ch in checks if ch.exceeded),
                           key=lambda ch: ch.ratio, reverse=True)
@@ -270,7 +267,7 @@ class BudgetService:
             raise BudgetUnavailableError(type(exc).__name__) from exc
 
         result: dict = {"scope": scope, "scope_id": scope_id, "policy": policy}
-        for counter, v in zip(counters, values):
+        for counter, v in zip(counters, values, strict=True):
             limit = limit_for(policy, counter.period.name)
             used = v.spent + v.reserved
             limit_n = None if limit is None else usd_to_nanos(limit)
@@ -287,5 +284,4 @@ class BudgetService:
         return result
 
     async def reconcile(self, now: datetime) -> dict:
-        return await reconcile_counters(self.session_factory, self.store, now,
-                                        self.verifier_scope)
+        return await reconcile_counters(self.session_factory, self.store, now)

@@ -40,7 +40,7 @@ class ModelRegistry:
     """Single source of truth for model facts. Loaded from YAML (DB later)."""
 
     def __init__(self, path: str):
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         self._models: dict[str, ModelSpec] = {}
@@ -61,7 +61,7 @@ class ModelRegistry:
         try:
             return self._models[name]
         except KeyError:
-            raise UnknownModelError(name)
+            raise UnknownModelError(name) from None
 
     def all(self) -> list[ModelSpec]:
         return list(self._models.values())

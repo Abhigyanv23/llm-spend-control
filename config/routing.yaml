@@ -48,6 +48,11 @@ features:
   #   reason: "Audited workflow: always the same model for reproducibility"
 
 classifier:
+  # rules-v1: keywords anywhere in the instructions (Phase 3).
+  # rules-v2: + ignores keywords in the payload after an instruction's colon, ignores negated
+  #           keywords ("don't analyze"), treats open why/how/what-if questions as tier 3.
+  #           Designed on the training split, evaluated on the held-out split (Phase 6).
+  version: rules-v2
   long_context_tokens: 6000           # inputs larger than this need at least tier 2
   # Whole-word, case-insensitive; an optional trailing "s"/"es" is also matched.
   keywords:

@@ -12,6 +12,7 @@ from app.registry import ModelRegistry
 from app.schemas import Priority
 
 TIERS = (1, 2, 3)
+CLASSIFIER_VERSIONS = ("rules-v1", "rules-v2")
 
 
 class RoutingConfigError(ValueError):
@@ -37,6 +38,7 @@ class ClassifierConfig:
     risk_keywords: tuple[str, ...] = ()
     structured_output_keywords: tuple[str, ...] = ()
     long_context_tokens: int = 6000
+    version: str = "rules-v1"                # rules-v1 | rules-v2 (Phase 6)
 
 
 @dataclass(frozen=True)
@@ -79,7 +81,7 @@ def _require_model(registry: ModelRegistry, name: str, where: str) -> None:
 
 
 def load_routing_config(path: str, profile: str, registry: ModelRegistry) -> RoutingConfig:
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
 
     profiles = data.get("profiles") or {}
@@ -133,7 +135,11 @@ def load_routing_config(path: str, profile: str, registry: ModelRegistry) -> Rou
         structured_output_keywords=tuple(
             str(k).lower() for k in raw_clf.get("structured_output_keywords") or ()),
         long_context_tokens=int(raw_clf.get("long_context_tokens", 6000)),
+        version=str(raw_clf.get("version", "rules-v1")),
     )
+    if classifier.version not in CLASSIFIER_VERSIONS:
+        raise RoutingConfigError(f"classifier.version must be one of {list(CLASSIFIER_VERSIONS)}, "
+                                 f"got {classifier.version!r}")
 
     raw_desc = data.get("tier_descriptions") or {}
     return RoutingConfig(
