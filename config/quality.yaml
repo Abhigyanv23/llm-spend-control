@@ -50,3 +50,5 @@ escalation:
 privacy:
   store_prompts: true             # false = routing misses keep features only, never the text
   max_prompt_chars: 2000
+  prompt_preview_chars: 120       # preview kept in request_logs for analytics (0 = none);
+                                  # also requires store_prompts: true

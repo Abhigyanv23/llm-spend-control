@@ -14,9 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from starlette.background import BackgroundTask
 
 from app.api import budgets as budgets_api
+from app.api import analytics as analytics_api
 from app.api import quality as quality_api
 from app.api import routing as routing_api
 from app.api import usage as usage_api
+from app.analytics import TTLCache
 from app.audit import AuditLogger, AuditRecord
 from app.bootstrap import build_core
 from app.config import Settings, settings as default_settings
@@ -49,6 +51,7 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
         app.state.budgets = core.budgets
         app.state.queue = core.queue
         app.state.audit = AuditLogger(core.session_factory)
+        app.state.analytics_cache = TTLCache(ttl_s=settings.analytics_cache_ttl_s)
         app.state.gateway = Gateway(core.registry, core.adapters, core.budgets, core.router,
                                     quality=core.quality_config)
 
@@ -68,11 +71,12 @@ def create_app(settings: Settings | None = None, *, engine: AsyncEngine | None =
         # Shutdown: close only what we created
         await core.aclose()
 
-    app = FastAPI(title="LLM Spend Control Center", version="0.4.0", lifespan=lifespan)
+    app = FastAPI(title="LLM Spend Control Center", version="0.5.0", lifespan=lifespan)
     app.include_router(usage_api.router)
     app.include_router(budgets_api.router)
     app.include_router(routing_api.router)
     app.include_router(quality_api.router)
+    app.include_router(analytics_api.router)
 
     @app.exception_handler(GatewayError)
     async def gateway_error_handler(request: Request, exc: GatewayError):
