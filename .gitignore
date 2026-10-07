@@ -6,3 +6,9 @@ __pycache__/
 *.db
 # Exported routing misses contain user prompts: never commit them
 *.jsonl
+# ...except the labelled simulation workload, which is part of the repo (Phase 6)
+!data/workload.jsonl
+.ruff_cache/
+# Simulation runs: keep reports, summaries, charts and gzipped results; drop machine-specific logs
+reports/*/*.log
+reports/*/results.jsonl

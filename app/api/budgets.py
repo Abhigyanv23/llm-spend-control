@@ -4,8 +4,14 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Path, Request
 
 from app.budgets.policies import list_policies, upsert_policy
-from app.schemas import (ID_MAX_LENGTH, ID_PATTERN, BudgetPolicyIn, BudgetPolicyOut,
-                         BudgetScope, BudgetStatusOut)
+from app.schemas import (
+    ID_MAX_LENGTH,
+    ID_PATTERN,
+    BudgetPolicyIn,
+    BudgetPolicyOut,
+    BudgetScope,
+    BudgetStatusOut,
+)
 
 router = APIRouter(prefix="/v1/budgets", tags=["budgets"])
 

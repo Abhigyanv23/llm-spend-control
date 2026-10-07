@@ -28,7 +28,7 @@ from app.providers.base import ProviderAdapter
 from app.quality.config import QualityConfig
 from app.quality.jobs import VerificationJob
 from app.quality.judges import Judge, JudgeResult
-from app.quality.queue import Entry, VerificationQueue
+from app.quality.queue import VerificationQueue
 from app.quality.store import save_verification, verification_exists
 from app.registry import ModelRegistry
 from app.schemas import ChatRequest, Message, Priority
@@ -221,6 +221,9 @@ class VerificationWorker:
                      reference: str | None = None, reference_tokens: tuple[int, int] = (0, 0),
                      better_tier: int | None = None) -> bool:
         meta = {"message_id": message_id, "request_created_at": job.created_at,
+                # Which budget this spend was charged to: reconciliation restores it there
+                "budget": {"team_id": self.cfg.budget_team_id,
+                           "feature": self.cfg.budget_feature},
                 "sample_rate": job.sample_rate, "priority": job.priority,
                 "reference_tokens": {"input": reference_tokens[0],
                                      "output": reference_tokens[1]}}

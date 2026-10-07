@@ -8,8 +8,10 @@ Reconciliation recomputes today's and this month's spend with SUM(cost_usd) and
 overwrites the counters, and resets all holds to 0.
 
 Verification spend (Phase 4) is real spend too, recorded in `verifications`, not
-`request_logs`. It is charged to the verifier's own team/feature (quality.yaml), so it is
-added to those counters here; otherwise every API restart would reset the verifier budget.
+`request_logs`. Each row records the budget it was charged to (metadata.budget.team_id /
+.feature), and it is restored to exactly those counters; otherwise every API restart would
+reset the verifier budget. Rows without that record (written before it existed, or synthetic
+demo rows) are not attributed to anyone rather than guessed.
 
 Caveat: resetting holds is only safe when no requests are in flight, e.g. at startup of
 a single instance. With several gateway instances this needs a lock or a quiet window.
@@ -26,9 +28,7 @@ from app.money import usd_to_nanos
 
 
 async def reconcile_counters(session_factory: async_sessionmaker, store: RedisBudgetStore,
-                             now: datetime,
-                             verifier_scope: tuple[str, str] | None = None) -> dict:
-    """verifier_scope = (team_id, feature) that verification spend is charged to."""
+                             now: datetime) -> dict:
     now = as_utc(now)
     periods = current_periods(now)
     spent: dict[Counter, int] = {}
@@ -46,16 +46,19 @@ async def reconcile_counters(session_factory: async_sessionmaker, store: RedisBu
                     if nanos:
                         spent[Counter(scope, scope_id, period)] = nanos
 
-            if verifier_scope is not None:
-                total = await session.scalar(
-                    select(func.coalesce(func.sum(Verification.verification_cost_usd), 0))
+            # Expressions built once and reused in GROUP BY (Postgres needs identical binds)
+            budget_team = Verification.meta["budget"]["team_id"].as_string()
+            budget_feature = Verification.meta["budget"]["feature"].as_string()
+            stmt = (select(budget_team, budget_feature, func.sum(Verification.verification_cost_usd))
                     .where(Verification.created_at >= period.start,
-                           Verification.created_at < period.resets_at))
+                           Verification.created_at < period.resets_at)
+                    .group_by(budget_team, budget_feature))
+            for team_id, feature, total in (await session.execute(stmt)).all():
                 nanos = usd_to_nanos(total or 0)
-                if nanos:
-                    for scope, scope_id in zip(("team", "feature"), verifier_scope):
-                        key = Counter(scope, scope_id, period)
-                        spent[key] = spent.get(key, 0) + nanos
+                if not nanos or not team_id or not feature:
+                    continue                    # no recorded budget: don't guess
+                for key in (Counter("team", team_id, period), Counter("feature", feature, period)):
+                    spent[key] = spent.get(key, 0) + nanos
 
     rebuilt = await store.rebuild(periods, spent, now)
     return {"periods": [p.key for p in periods], "counters_rebuilt": rebuilt,

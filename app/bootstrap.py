@@ -83,11 +83,9 @@ def build_core(settings: Settings, *, engine: AsyncEngine | None = None,
                                          redis_timeout_s or settings.redis_timeout_s)
     session_factory = create_session_factory(db_engine)
     store = RedisBudgetStore(redis)
-    vcfg = quality_config.verification
     budgets = BudgetService(store, session_factory,
                             warn_threshold=settings.budget_warn_threshold,
-                            fail_mode=settings.budget_fail_mode,
-                            verifier_scope=(vcfg.budget_team_id, vcfg.budget_feature))
+                            fail_mode=settings.budget_fail_mode)
     return Core(settings=settings, registry=registry, routing_config=routing_config,
                 providers=providers, router=router, quality_config=quality_config,
                 http_client=http_client, adapters=build_adapters(http_client, settings),

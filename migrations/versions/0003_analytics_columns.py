@@ -10,15 +10,15 @@ and dialect-specific. Real columns are fast, indexable and portable. The JSON st
 complete record; the columns are a denormalised copy for reads.
 """
 import json
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0003"
-down_revision: Union[str, None] = "0002"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0002"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 MONEY = sa.Numeric(14, 8)
 
