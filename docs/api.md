@@ -6,8 +6,9 @@ Base URL: `http://127.0.0.1:8000`. Interactive docs are at `/docs`.
 with 8 decimal places (`"0.00000430"`), never a float. Parse it with a decimal type
 (`decimal.Decimal` in Python, `BigDecimal` in Java, a decimal library in JS).
 
-**Authentication.** None yet: every endpoint, budget changes included, is open to anyone who
-can reach the server. Known limitation, planned for a later phase.
+**Authentication.** None yet: every endpoint, budget changes and stored prompt previews
+included, is open to anyone who can reach the server. Known limitation, planned for a later
+phase.
 
 ## `POST /v1/chat`
 
@@ -97,6 +98,51 @@ X-Budget-Warning: budget-check-unavailable
 | `savings_usd` | `baseline_cost_usd − cost_usd` (a counterfactual estimate) |
 
 Failed requests store `metadata.routing` in the audit log too (without baseline or savings).
+For an escalated request, `final_model`/`final_tier` are the model that produced the returned
+answer, and `savings_usd` is computed against the **total** cost of all attempts (it can be
+negative).
+
+`metadata.escalation` (Phase 4), present on every successful response:
+
+```json
+"escalation": {
+  "pre_call": null,
+  "attempts": [
+    { "model": "mock-echo", "tier": 1, "cost_usd": "0.00000050",
+      "estimated_cost_usd": "0.00040090", "input_tokens": 5, "output_tokens": 0,
+      "latency_ms": 64.12, "finish_reason": "stop", "check_failed": "empty" },
+    { "model": "mock-medium", "tier": 2, "cost_usd": "0.00006500",
+      "estimated_cost_usd": "0.00500900", "input_tokens": 5, "output_tokens": 12,
+      "latency_ms": 81.37, "finish_reason": "stop", "check_failed": null,
+      "escalated_because": "empty" }
+  ],
+  "escalated": true, "escalations": 1, "final_check_failed": null,
+  "blocked": null, "note": null, "extra_cost_usd": "0.00006500"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `pre_call` | `null` if the rule didn't apply; else `{applied, from_model, from_tier, to_model, to_tier, reason}` (`applied: false` with a reason when it applied but couldn't bump) |
+| `attempts` | Every provider call made for this request, in order, with its cost and the post-call check it failed (`empty`, `refusal`, `truncated`, `invalid_json`, or `null`) |
+| `escalated`, `escalations` | Whether (and how many times) the post-call cascade replaced the answer |
+| `final_check_failed` | The check the *returned* answer still fails (e.g. after `max_escalations`), or `null` |
+| `blocked` | Set when the escalation was blocked by a budget: `{model, tier, blocked_by, estimated_cost_usd}`; the original answer is returned |
+| `note` | Why no (further) escalation happened, e.g. `not escalated: the model was chosen by 'explicit'` |
+| `extra_cost_usd` | Cost of the escalation attempts (already included in `cost_usd`) |
+
+`cost_usd` and `usage` of an escalated request are the **sums over all attempts**.
+
+`metadata.quality.sampling` (Phase 4): whether this answer was queued for asynchronous
+verification.
+
+```json
+"quality": { "sampling": { "sampled": true, "rate": 0.5,
+                           "reason": "low-confidence rate 50%: sampled", "fraction": 0.003162 } }
+```
+`fraction` is the request id's hash in [0, 1); the answer is sampled when `fraction < rate`.
+Ineligible requests (explicit/pinned model, tier 3, escalated, verification disabled) have
+`rate: 0` and a reason.
 
 ### Errors
 All gateway errors share this shape (`request_id` matches the audit-log row):
@@ -137,7 +183,12 @@ allowed model was also blocked; the details describe the last (cheapest) attempt
 | 503 | `provider_error` | Provider not configured (missing API key) for an explicit or pinned model |
 | 503 | `no_route` | No available model in the allowed tiers satisfies the request (API keys, required capabilities) |
 | 503 | `budget_unavailable` | Redis/Postgres unreachable and `BUDGET_FAIL_MODE=closed` (retryable) |
+| 503 | `database_unavailable` | Postgres unreachable on a read endpoint (`/v1/usage`, `/v1/budgets`, `/v1/quality`) (retryable) |
+| 503 | `queue_unavailable` | Redis unreachable on `/v1/quality/queue` (retryable) |
 | 504 | `provider_error` | Upstream timeout (retryable) |
+
+A failed or budget-blocked **escalation** never produces an error: the original answer is
+returned with `metadata.escalation.blocked` / `.note`.
 
 **Why 402 and not 429 or 403?** 429 means "too many requests, slow down": a rate limit that
 clears in seconds, which clients retry automatically. 403 means "you are not allowed", a
@@ -165,6 +216,97 @@ No provider call, no budget reservation, no audit row. Use it to tune `config/ro
 Errors are the same as for `/v1/chat` routing: `400 unknown_model`, `400 context_too_long`,
 `503 no_route`, `422` validation.
 
+The preview applies the same pre-call escalation as `/v1/chat` and reports it in
+`pre_call_escalation` (`null` when the rule doesn't apply), so a `high`/`critical` low-confidence
+request previews on the bumped tier.
+
+## `GET /v1/quality`
+How safe is cheap routing, and is it still saving money? Aggregates `verifications`,
+`routing_misses` and `request_logs` over a time window.
+
+| Query param | Type | Notes |
+|---|---|---|
+| `team_id`, `feature` | string | Exact match (applies to all sections) |
+| `from` | ISO 8601 datetime | Inclusive. Default: 7 days ago. Naive values are UTC |
+| `to` | ISO 8601 datetime | Exclusive. Default: now |
+
+```json
+{
+  "window": { "from": "2026-09-24T15:44:02Z", "to": null },
+  "filters": { "team_id": null, "feature": null },
+  "verification": {
+    "verified": 17, "pass": 8, "fail": 9, "inconclusive": 0, "skipped": 0,
+    "rates": { "pass": 0.4706, "fail": 0.5294, "inconclusive": 0.0, "skipped": 0.0 },
+    "miss_rate": 0.5294, "miss_rate_margin_95": 0.2373, "miss_rate_weighted": 0.5294,
+    "by_model": [ { "model": "mock-echo", "judged": 17, "fail": 9, "miss_rate": 0.5294 } ],
+    "verification_cost_usd": "0.15538500"
+  },
+  "misses": { "total": 9, "by_model": [ { "model": "mock-echo", "count": 9 } ],
+              "by_feature": [ { "feature": "check4b", "count": 5 } ] },
+  "requests": { "successful": 24, "sampled": 9, "sample_rate": 0.375 },
+  "escalation": { "pre_call_escalations": 1, "post_call_escalations": 4,
+                  "escalation_rate": 0.1667, "escalation_extra_cost_usd": "0.00028800" },
+  "costs": { "requests_cost_usd": "0.00350000", "verification_cost_usd": "0.15538500",
+             "verification_overhead_pct": 4439.57, "gross_savings_usd": "0.03100000",
+             "net_savings_usd": "-0.12438500" }
+}
+```
+(Illustrative dev-profile values. The negative net savings is real behaviour at these sample
+rates: verifying long prompts with a tier-3 reference costs far more than the cheap requests.)
+
+| Field | Meaning |
+|---|---|
+| `miss_rate` | `fail / (pass + fail)`: share of verified cheap answers that a stronger model's answer showed were not good enough. `inconclusive` and `skipped` are excluded |
+| `miss_rate_margin_95` | Normal-approximation 95% margin of error: `1.96 × √(p(1−p)/n)` |
+| `miss_rate_weighted` | Each verdict weighted by `1 / sample_rate`, correcting for over-sampled low-confidence routes |
+| `verification_cost_usd` | Reference + judge spend (charged to the `quality-verifier` budget) |
+| `escalation_rate` | Post-call escalations / successful requests |
+| `gross_savings_usd` | Sum of `metadata.routing.savings_usd` (already net of escalation cost) |
+| `net_savings_usd` | `gross_savings_usd − verification_cost_usd` |
+
+Rates are `null` when their denominator is 0.
+
+## `GET /v1/quality/misses`
+Routing misses (cheap answers that failed verification), newest first. The listing shows only
+a 200-character `prompt_preview`; the full stored prompt is only in `scripts/export_misses.py`.
+
+| Query param | Type | Notes |
+|---|---|---|
+| `team_id`, `feature` | string | Exact match |
+| `model` | string | The cheap model that missed |
+| `from`, `to` | ISO 8601 | Default window: last 7 days |
+| `limit` | int | 1–500, default 50 |
+| `offset` | int | ≥ 0 |
+
+```json
+{
+  "items": [
+    { "request_id": "5b57b889-...", "created_at": "2026-10-01T15:43:26.481100+00:00",
+      "team_id": "smoke4-17666d14", "feature": "smoke4", "prompt_chars": 2000,
+      "prompt_preview": "point0 point1 point2 ...",
+      "chosen_model": "mock-echo", "chosen_tier": 1,
+      "better_model": "mock-large", "better_tier": 3,
+      "reason": "sequence similarity 0.168 < threshold 0.8",
+      "classifier_confidence": 0.5,
+      "classifier_features": { "input_tokens": 608, "has_code": false, "...": "..." } }
+  ],
+  "total": 2, "limit": 50, "offset": 0, "has_more": false
+}
+```
+`prompt_preview` / `prompt_chars` are `null` when `privacy.store_prompts` is `false`.
+
+## `GET /v1/quality/queue`
+Health of the verification queue (Redis Streams).
+```json
+{ "stream": "quality:verify", "consumer_group": "verifiers", "length": 22, "pending": 0,
+  "dead_letter_stream": "quality:verify:dead", "dead_letter": 0,
+  "consumers": [ { "name": "LAPTOP-0HV28H9P-33068", "pending": 0, "idle_ms": 669 } ] }
+```
+- `length`: entries in the stream (acked history included, capped by `MAXLEN ~`)
+- `pending`: delivered to a worker but not yet acked (in progress, or waiting to be reclaimed)
+- `dead_letter`: jobs that failed `max_attempts` times or were malformed
+- Before any worker has run, the consumer group doesn't exist yet: `pending` is 0 and `consumers` empty.
+
 ## `GET /v1/routing`
 The active routing policy and the providers currently usable (API key set, or keyless).
 ```json
@@ -184,6 +326,159 @@ The active routing policy and the providers currently usable (API key set, or ke
                          "reason": "Legal review: correctness matters more than cost" }
   },
   "available_providers": ["mock", "ollama"]
+}
+```
+
+## Analytics API (`/v1/analytics/*`)
+Read-only aggregates for the dashboard (Phase 5). Every response carries `generated_at` (UTC)
+and `cached` (served from the `ANALYTICS_CACHE_TTL_S` cache). Money is a fixed-point string;
+dates are UTC.
+
+**Common window parameters** (all endpoints except `/projections`):
+
+| Query param | Type | Notes |
+|---|---|---|
+| `from` | ISO 8601 | Inclusive. Default: 30 days before `to`. Naive values are UTC |
+| `to` | ISO 8601 | Exclusive. Default: now |
+| `team_id`, `feature` | string | Exact-match filters |
+
+`400 invalid_window` when `from` ≥ `to` or the window exceeds `ANALYTICS_MAX_WINDOW_DAYS` (366).
+
+The examples below are real responses from the seeded demo data, trimmed.
+
+### `GET /v1/analytics/summary`
+Headline KPIs. "Today" and "month to date" use the current UTC day/month regardless of the window.
+```json
+{
+  "generated_at": "2026-10-01T18:36:23.441567Z",
+  "window": { "from": "2026-09-01T18:36:23.350088Z", "to": "2026-10-01T18:36:23.350088Z",
+              "team_id": null, "feature": null },
+  "requests": 6150, "cost_usd": "22.55041920", "error_rate": 0.0065,
+  "spend_today_usd": "0.80027920", "spend_month_to_date_usd": "0.80027920",
+  "projected_month_end_usd": "24.80865520",
+  "gross_savings_pct": 53.02, "net_savings_pct": 43.9, "net_savings_usd": "19.50414710",
+  "verifier_pass_rate": 0.8404, "verifier_pass_rate_ci95": [0.8086, 0.8678],
+  "escalation_rate": 0.028,
+  "scopes_at_risk": [ { "scope": "team", "scope_id": "demo-marketing", "status": "at_risk",
+                        "projected_pct_of_limit": 125.0 } ],
+  "active_budget_alerts": [ { "scope": "team", "scope_id": "smoke4-12f106d9-tight",
+                              "period": "day", "period_key": "2026-10-01", "threshold": 1.0,
+                              "projected_usd": "0.00500950", "limit_usd": "0.00100000",
+                              "created_at": "2026-10-01T18:33:43.176403Z" } ],
+  "cached": false
+}
+```
+
+### `GET /v1/analytics/spend?group_by=team|feature|model`
+Daily cost per group, **zero-filled** (every series has a point for every UTC day in the
+window), sorted by total, plus cost by model and provider.
+```json
+{
+  "group_by": "team", "days": ["2026-09-30", "2026-10-01"], "total_cost_usd": "22.55041920",
+  "series": [ { "key": "demo-research", "total_cost_usd": "11.69092600", "requests": 733,
+                "points": [ { "date": "2026-09-30", "cost_usd": "0.40744300", "requests": 23 },
+                            { "date": "2026-10-01", "cost_usd": "0.35671200", "requests": 24 } ] } ],
+  "by_model": [ { "model": "mock-large", "provider": "mock", "requests": 911,
+                  "cost_usd": "13.60339800", "input_tokens": 1603023, "output_tokens": 577866,
+                  "avg_cost_usd": "0.01493238" } ]
+}
+```
+
+### `GET /v1/analytics/projections`
+Month-end projections for the **current** UTC month (no window). Params: `team_id`, `feature`
+(filtering one scope returns only that scope), `burndown` (default `true`).
+```json
+{
+  "month": "2026-10", "days_in_month": 31, "elapsed_days": 0.775277,
+  "items": [ {
+    "scope": "team", "scope_id": "demo-marketing", "monthly_limit_usd": "4.49600440",
+    "month_to_date_usd": "0.18129050", "daily_run_rate_usd": "0.18129050",
+    "projected_usd": { "run_rate": "5.62000550", "trailing_7d": "4.57708786", "ewma": "5.66074565" },
+    "projected_pct_of_limit": 125.0, "status": "at_risk",
+    "projected_exhaustion_at": "2026-10-25T13:48:23.935837Z",
+    "burndown": [ { "date": "2026-10-01", "cumulative_usd": "0.18129050", "ideal_usd": "0.14503240",
+                    "projected_usd": null, "limit_usd": "4.49600440" },
+                  { "date": "2026-10-02", "cumulative_usd": null, "ideal_usd": "0.29006480",
+                    "projected_usd": "0.36258100", "limit_usd": "4.49600440" } ]
+  } ]
+}
+```
+| Field | Meaning |
+|---|---|
+| `projected_usd.run_rate` | MTD / max(elapsed days, 1) × days in month |
+| `projected_usd.trailing_7d` | MTD + mean of the last 7 complete days × remaining days |
+| `projected_usd.ewma` | MTD + EWMA (α 0.3) of this month's daily spend × remaining days |
+| `projected_pct_of_limit` | Run-rate projection as % of `monthly_limit_usd` |
+| `status` | `exhausted` (MTD ≥ limit), `at_risk` (run-rate exhausts it before month end), `warning` (projected ≥ 80%), `ok`, `no_limit` |
+| `projected_exhaustion_at` | When the run-rate reaches the limit (only if before month end) |
+| `burndown` | Per day: actual cumulative spend (past), ideal straight line to the limit, run-rate projection (future) |
+Items are sorted most urgent first.
+
+### `GET /v1/analytics/top?kind=patterns|requests&limit=10`
+`patterns` groups by prompt fingerprint (`limit` 1–100); `requests` lists single requests.
+```json
+{ "kind": "patterns", "items": [ {
+    "prompt_fingerprint": "add658f9cc259fd5c73c51b288d280ee15e54d475ceee457fc10a2af54526a6f",
+    "requests": 201, "total_cost_usd": "3.65766900", "avg_cost_usd": "0.01819736",
+    "models": { "mock-large": 178, "mock-medium": 23 },
+    "prompt_preview": "Debug the failing test in module 9996" } ] }
+```
+`prompt_preview` is `null` unless `privacy.store_prompts` is on.
+
+### `GET /v1/analytics/savings`
+Routed, successful requests only. `net = gross − verification_overhead`.
+```json
+{
+  "routed_requests": 5530, "baseline_cost_usd": "44.42760600", "actual_cost_usd": "20.87383990",
+  "gross_savings_usd": "23.55376610", "gross_savings_pct": 53.02,
+  "verification_overhead_usd": "4.04961900", "net_savings_usd": "19.50414710",
+  "net_savings_pct": 43.9, "all_requests_cost_usd": "22.55041920",
+  "by_feature": [ { "feature": "summarize", "requests": 1789, "baseline_cost_usd": "15.01787700",
+                    "actual_cost_usd": "5.68647790", "gross_savings_usd": "9.33139910",
+                    "savings_pct": 62.14 } ],
+  "by_tier": [ { "tier": 1, "requests": 1838, "baseline_cost_usd": "8.18592300",
+                 "actual_cost_usd": "0.23793580", "gross_savings_usd": "7.94798720",
+                 "savings_pct": 97.09 } ]
+}
+```
+
+### `GET /v1/analytics/quality`
+```json
+{
+  "successful_requests": 6031,
+  "tier_distribution": { "1": 2000, "2": 3129, "3": 897, "unknown": 5 },
+  "route_sources": { "routed": 5530, "explicit": 296, "pinned": 200, "unknown": 5 },
+  "escalation": { "post_call": 169, "pre_call": 235, "post_call_rate": 0.028, "pre_call_rate": 0.039 },
+  "budget": { "downgrades": 81, "blocks": 70, "overrides": 54 },
+  "verification": { "pass": 495, "fail": 94, "inconclusive": 15, "skipped": 0, "verified": 604,
+                    "judged": 589, "pass_rate": 0.8404, "pass_rate_ci95": [0.8086, 0.8678] },
+  "verification_by_model": [ { "model": "mock-echo", "judged": 266, "pass": 206, "fail": 60,
+                               "pass_rate": 0.7744, "pass_rate_ci95": [0.7205, 0.8206] } ],
+  "misses_by_model": { "mock-echo": 60, "mock-medium": 34 },
+  "misses_by_feature": { "summarize": 30, "extraction": 14, "...": "..." }
+}
+```
+`pass_rate_ci95` is a 95% **Wilson score** interval (`null` when nothing was judged).
+
+### `GET /v1/analytics/latency`
+Successful requests only.
+```json
+{ "by_model": [
+    { "model": "mock-echo", "requests": 2005, "avg_ms": 846.52, "p50_ms": 698.52,
+      "p95_ms": 1531.11, "p99_ms": 5165.06 },
+    { "model": "mock-large", "requests": 897, "avg_ms": 3055.24, "p50_ms": 2566.3,
+      "p95_ms": 5437.67, "p99_ms": 14094.11 } ] }
+```
+
+### `GET /v1/analytics/errors`
+`errors` counts `provider_error` and `internal_error`; budget blocks and validation errors are
+listed under `by_error_code` / `by_status` but are not provider errors.
+```json
+{
+  "by_provider": [ { "provider": "mock", "requests": 6139, "errors": 37, "error_rate": 0.006 } ],
+  "by_error_code": [ { "error_code": "budget_exceeded", "status": "budget_blocked", "count": 67 },
+                     { "error_code": "provider_error", "status": "provider_error", "count": 40 } ],
+  "by_status": { "success": 6031, "budget_blocked": 70, "provider_error": 40, "validation_error": 9 }
 }
 ```
 

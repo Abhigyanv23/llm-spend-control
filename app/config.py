@@ -28,5 +28,15 @@ class Settings(BaseSettings):
     routing_config_path: str = "config/routing.yaml"
     routing_profile: str = "dev"        # "dev" = mock model per tier, "production" = real providers
 
+    # Phase 4: quality checks and escalation
+    quality_config_path: str = "config/quality.yaml"
+    verify_enabled: bool = True         # false = no sampling/verification (escalation still works)
+    worker_concurrency: int = Field(default=4, ge=1, le=64)   # jobs processed in parallel
+    worker_consumer_name: str | None = None   # unique per worker process; default host-pid
+
+    # Phase 5: analytics API + dashboard
+    analytics_cache_ttl_s: float = Field(default=30.0, ge=0)   # 0 disables the cache
+    analytics_max_window_days: int = Field(default=366, ge=1)
+
 
 settings = Settings()
