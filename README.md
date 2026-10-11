@@ -85,6 +85,8 @@ Local development (Windows PowerShell; Linux/Mac use the same Python commands):
 Full report: [`reports/final-v2/report.md`](reports/final-v2/report.md) · rebuild it with
 `python scripts/build_report.py final-v2`.
 
+   **Live demo:** [llm-spend-control.streamlit.app](https://https://llm-spend-control.streamlit.app) (dashboard on seeded demo data)
+
 ## Running things
 
 ```powershell
