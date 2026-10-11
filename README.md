@@ -32,7 +32,6 @@ flowchart LR
 ```
 
 ![Dashboard overview](docs/images/dashboard-overview.png)
-*(Screenshot placeholder: add `docs/images/dashboard-overview.png`.)*
 
 ## Quickstart
 
