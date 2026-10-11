@@ -1,4 +1,4 @@
-"""LLM Spend Control Center: cost dashboard (Phase 5).
+"""LLM Spend Control Center: cost dashboard (Phase 5, snapshot mode added for hosting).
 
     python -m streamlit run dashboard/app.py
 
@@ -6,16 +6,23 @@ Reads ONLY from the analytics API (GATEWAY_URL, default http://127.0.0.1:8000), 
 database: the business logic lives in one place (the API), the API can be secured later, and
 the UI stays a thin presentation layer. Charts use Altair (declarative Vega-Lite, already a
 Streamlit dependency, good defaults for time series and tooltips).
+
+Data source (DASHBOARD_MODE):
+    live      always call the API
+    snapshot  read dashboard/snapshot/snapshot.json (exported analytics responses)
+    auto      (default) the API if it answers /health, otherwise the snapshot
+Snapshot mode is what runs on Streamlit Community Cloud, where no API is reachable.
 """
 import os
-from datetime import UTC, datetime, timedelta
 
 import altair as alt
 import httpx
 import pandas as pd
 import streamlit as st
+from data_source import api_is_up, fetch_live, load_snapshot, snapshot_key, window_params
 
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://127.0.0.1:8000").rstrip("/")
+MODE_SETTING = os.environ.get("DASHBOARD_MODE", "auto").lower()
 CACHE_TTL_S = 30
 
 st.set_page_config(page_title="LLM Spend Control Center", page_icon="💸", layout="wide")
@@ -24,17 +31,45 @@ st.set_page_config(page_title="LLM Spend Control Center", page_icon="💸", layo
 # ---------------------------------------------------------------- data access
 
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
-def fetch(path: str, params: tuple) -> dict:
+def cached_live(path: str, params: tuple) -> dict:
     """GET an analytics endpoint. Cached per (path, params) for CACHE_TTL_S seconds."""
-    resp = httpx.get(f"{GATEWAY_URL}/v1/analytics/{path}",
-                     params={k: v for k, v in params if v not in (None, "")}, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+    return fetch_live(GATEWAY_URL, path, dict(params))
 
 
-def api(path: str, **params) -> dict | None:
+@st.cache_data(show_spinner=False)
+def snapshot() -> dict | None:
+    return load_snapshot()
+
+
+@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
+def resolve_mode() -> str:
+    if MODE_SETTING in ("live", "snapshot"):
+        return MODE_SETTING
+    return "live" if api_is_up(GATEWAY_URL) else "snapshot"
+
+
+MODE = resolve_mode()
+SNAPSHOT = snapshot() if MODE == "snapshot" else None
+if MODE == "snapshot" and SNAPSHOT is None:
+    st.error("No API reachable at "
+             f"{GATEWAY_URL} and no snapshot file found. Start the API, or create a snapshot "
+             "with: python scripts/export_dashboard_snapshot.py")
+    st.stop()
+
+
+def api(path: str, days: int | None = None, **extra) -> dict | None:
+    """One analytics request. `days` selects the time window; endpoints without a window
+    (projections) pass None."""
+    if MODE == "snapshot":
+        data = SNAPSHOT["responses"].get(snapshot_key(path, days, **extra))
+        if data is None:
+            st.warning(f"`{path}` is not in the demo snapshot for this selection.")
+        return data
+    params = (window_params(days, team, feature) if days is not None
+              else {"team_id": team, "feature": feature})
+    params.update(extra)
     try:
-        return fetch(path, tuple(sorted(params.items())))
+        return cached_live(path, tuple(sorted(params.items())))
     except httpx.HTTPError as exc:
         st.error(f"Could not load `{path}` from {GATEWAY_URL}: {exc}. Is the API running?")
         return None
@@ -66,18 +101,29 @@ def empty(message: str = "No data in this window.") -> None:
 
 st.sidebar.title("💸 Spend Control")
 days = st.sidebar.selectbox("Window", [7, 30, 90], index=1, format_func=lambda d: f"Last {d} days")
-team = st.sidebar.text_input("Team (optional)", placeholder="e.g. demo-search").strip() or None
-feature = st.sidebar.text_input("Feature (optional)", placeholder="e.g. summarize").strip() or None
+filters_off = MODE == "snapshot"
+team = st.sidebar.text_input("Team (optional)", placeholder="e.g. demo-search",
+                             disabled=filters_off).strip() or None
+feature = st.sidebar.text_input("Feature (optional)", placeholder="e.g. summarize",
+                                disabled=filters_off).strip() or None
+if filters_off:
+    team = feature = None
+    st.sidebar.caption("Team and feature filters need the live API.")
 if st.sidebar.button("Refresh data"):
     st.cache_data.clear()
-st.sidebar.caption(f"API: `{GATEWAY_URL}` · cached {CACHE_TTL_S}s · all times UTC")
-
-now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-window = {"from": (now - timedelta(days=days)).isoformat(), "to": now.isoformat(),
-          "team_id": team, "feature": feature}
+if MODE == "live":
+    st.sidebar.caption(f"API: `{GATEWAY_URL}` · cached {CACHE_TTL_S}s · all times UTC")
+else:
+    st.sidebar.caption("Source: demo data snapshot · all times UTC")
 
 st.title("LLM Spend Control Center")
-summary = api("summary", **window)
+if MODE == "snapshot":
+    st.info(f"**Demo snapshot.** These figures were exported from seeded demo data on "
+            f"{SNAPSHOT['meta']['exported_at']} (UTC); they do not change. Run the project "
+            "locally to see live data. Source: "
+            "[github.com/Abhigyanv23/llm-spend-control]"
+            "(https://github.com/Abhigyanv23/llm-spend-control)")
+summary = api("summary", days)
 if summary is None:
     st.stop()
 st.caption(f"Data as of {summary['generated_at']} (UTC) · window: last {days} days"
@@ -127,7 +173,7 @@ with tabs[0]:
 
 with tabs[1]:
     group_by = st.radio("Group by", ["team", "feature", "model"], horizontal=True)
-    spend = api("spend", **window, group_by=group_by)
+    spend = api("spend", days, group_by=group_by)
     if spend and spend["series"]:
         rows = [{"date": p["date"], group_by: s["key"], "cost_usd": usd(p["cost_usd"]),
                  "requests": p["requests"]} for s in spend["series"] for p in s["points"]]
@@ -150,7 +196,7 @@ with tabs[1]:
                          "avg_cost_usd": st.column_config.NumberColumn("Avg / request",
                                                                        format="$%.6f")})
         st.subheader("Most expensive prompt patterns")
-        top = api("top", **window, kind="patterns", limit=10)
+        top = api("top", days, kind="patterns", limit=10)
         if top and top["items"]:
             patterns = pd.DataFrame([{**i, "total_cost_usd": usd(i["total_cost_usd"]),
                                       "avg_cost_usd": usd(i["avg_cost_usd"]),
@@ -168,7 +214,7 @@ with tabs[1]:
 # ---------------------------------------------------------------- Budgets
 
 with tabs[2]:
-    proj = api("projections", team_id=team, feature=feature, burndown=True)
+    proj = api("projections", burndown=True)
     if proj and proj["items"]:
         st.caption(f"Month {proj['month']}: day {proj['elapsed_days']:.1f} of {proj['days_in_month']}. "
                    "Run-rate = month-to-date / elapsed days x days in month.")
@@ -204,7 +250,7 @@ with tabs[2]:
 # ---------------------------------------------------------------- Savings
 
 with tabs[3]:
-    savings = api("savings", **window)
+    savings = api("savings", days)
     if savings and savings["routed_requests"]:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Baseline (all strongest)", fmt_usd(savings["baseline_cost_usd"]))
@@ -236,7 +282,7 @@ with tabs[3]:
 # ---------------------------------------------------------------- Routing quality
 
 with tabs[4]:
-    quality = api("quality", **window)
+    quality = api("quality", days)
     if quality and quality["successful_requests"]:
         v = quality["verification"]
         c1, c2, c3, c4 = st.columns(4)
@@ -285,7 +331,7 @@ with tabs[4]:
 # ---------------------------------------------------------------- Performance
 
 with tabs[5]:
-    latency = api("latency", **window)
+    latency = api("latency", days)
     if latency and latency["by_model"]:
         frame = pd.DataFrame(latency["by_model"])
         long = frame.melt(id_vars=["model"], value_vars=["p50_ms", "p95_ms", "p99_ms"],
@@ -300,7 +346,7 @@ with tabs[5]:
         st.dataframe(frame, hide_index=True, width="stretch")
     else:
         empty()
-    errors = api("errors", **window)
+    errors = api("errors", days)
     if errors and errors["by_provider"]:
         st.subheader("Error rate by provider")
         providers = pd.DataFrame(errors["by_provider"])
